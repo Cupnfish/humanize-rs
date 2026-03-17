@@ -400,13 +400,14 @@ pub fn handle_ask_codex(prompt: &str, model: &str, effort: &str, timeout: u64) -
 
     let ask_script = format!("{}/scripts/ask-codex.sh", plugin_root);
 
+    // Shell expects --codex-model MODEL:EFFORT and --codex-timeout SECONDS
+    let model_effort = format!("{}:{}", model, effort);
+
     let status = std::process::Command::new(&ask_script)
         .arg(prompt)
-        .arg("--model")
-        .arg(model)
-        .arg("--effort")
-        .arg(effort)
-        .arg("--timeout")
+        .arg("--codex-model")
+        .arg(&model_effort)
+        .arg("--codex-timeout")
         .arg(timeout.to_string())
         .status()?;
 
