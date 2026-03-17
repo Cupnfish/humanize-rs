@@ -116,6 +116,10 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
 }
 
 /// Validate Read tool access.
+///
+/// Implements full parity with loop-read-validator.sh:
+/// 1. Blocks todos files unless allowlisted
+/// 2. For summary/prompt files: validates location, round number, and directory
 fn validate_read(input: &HookInput) -> HookOutput {
     let file_path = match get_file_path(input) {
         Some(p) => p,
@@ -124,13 +128,128 @@ fn validate_read(input: &HookInput) -> HookOutput {
 
     let path_lower = file_path.to_lowercase();
 
-    // Check for round-specific files
-    if is_round_specific_file(&path_lower) {
-        // TODO: Implement full allowlist logic matching shell
-        // For now, block round files
+    // Check for todos files - block unless allowlisted
+    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Todos) {
+        // Try to find active loop and check allowlist
+        let project_root = match std::env::var("CLAUDE_PROJECT_DIR") {
+            Ok(p) => p,
+            Err(_) => return HookOutput::block(format!(
+                "Reading todos files is not allowed: {}",
+                file_path
+            )),
+        };
+
+        let loop_base_dir = format!("{}/.humanize/rlcr", project_root);
+        let session_id = input.session_id.as_deref();
+
+        if let Some(loop_dir) = humanize_core::state::find_active_loop(
+            std::path::Path::new(&loop_base_dir),
+            session_id,
+        ) {
+            // Parse state to get current round
+            let state_file = humanize_core::state::resolve_active_state_file(&loop_dir);
+            if let Some(state_path) = state_file {
+                if let Ok(content) = std::fs::read_to_string(&state_path) {
+                    if let Ok(state) = humanize_core::state::State::from_markdown_strict(&content) {
+                        if humanize_core::fs::is_allowlisted_file(&file_path, &loop_dir, state.current_round) {
+                            return HookOutput::allow();
+                        }
+                    }
+                }
+            }
+        }
+
         return HookOutput::block(format!(
-            "Reading round-specific files is not allowed: {}",
+            "Reading todos files is not allowed. Use native Task tools instead: {}",
             file_path
+        ));
+    }
+
+    // Check for summary/prompt files
+    let is_summary = humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Summary);
+    let is_prompt = humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt);
+
+    if !is_summary && !is_prompt {
+        return HookOutput::allow(); // Not a round file, allow
+    }
+
+    // This is a summary or prompt file - validate against active loop
+    let project_root = match std::env::var("CLAUDE_PROJECT_DIR") {
+        Ok(p) => p,
+        Err(_) => return HookOutput::allow(), // No project context, allow
+    };
+
+    let loop_base_dir = format!("{}/.humanize/rlcr", project_root);
+    let session_id = input.session_id.as_deref();
+
+    let active_loop_dir = match humanize_core::state::find_active_loop(
+        std::path::Path::new(&loop_base_dir),
+        session_id,
+    ) {
+        Some(d) => d,
+        None => return HookOutput::allow(), // No active loop, allow
+    };
+
+    // Get current round from state
+    let state_file = match humanize_core::state::resolve_active_state_file(&active_loop_dir) {
+        Some(s) => s,
+        None => return HookOutput::allow(),
+    };
+
+    let state_content = match std::fs::read_to_string(&state_file) {
+        Ok(c) => c,
+        Err(_) => return HookOutput::allow(),
+    };
+
+    let state = match humanize_core::state::State::from_markdown_strict(&state_content) {
+        Ok(s) => s,
+        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety".to_string()),
+    };
+
+    let current_round = state.current_round;
+
+    // Validate file location - must be in .humanize/rlcr/ or .humanize/pr-loop/
+    if !humanize_core::fs::is_in_humanize_loop_dir(&path_lower) {
+        let file_type = if is_summary { "summary" } else { "prompt" };
+        return HookOutput::block(format!(
+            "Reading {} is blocked. Read from the active loop: {}",
+            file_path,
+            active_loop_dir.display()
+        ));
+    }
+
+    // Extract round number from filename
+    let claude_round = match humanize_core::fs::extract_round_number(&file_path) {
+        Some(r) => r,
+        None => return HookOutput::allow(), // Can't determine round, allow
+    };
+
+    // Check if file is allowlisted
+    if humanize_core::fs::is_allowlisted_file(&file_path, &active_loop_dir, current_round) {
+        return HookOutput::allow();
+    }
+
+    // Validate round number
+    if claude_round != current_round {
+        let file_type = if is_summary { "summary" } else { "prompt" };
+        return HookOutput::block(format!(
+            "You tried to read round-{}-{}.md but current round is {}. Read from: {}",
+            claude_round,
+            file_type,
+            current_round,
+            active_loop_dir.display()
+        ));
+    }
+
+    // Validate directory path - must match active loop directory
+    let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
+    let correct_path = active_loop_dir.join(filename);
+
+    if file_path != correct_path.to_string_lossy() {
+        return HookOutput::block(format!(
+            "You tried to read {} but the correct path is {}",
+            file_path,
+            correct_path.display()
         ));
     }
 
@@ -348,23 +467,6 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
     let _ = std::fs::remove_file(&pending_file);
 
     HookOutput::allow()
-}
-
-/// Check if path is a round-specific file.
-fn is_round_specific_file(path_lower: &str) -> bool {
-    // Check for round-N-*.md pattern
-    if path_lower.contains("/round-") || path_lower.starts_with("round-") {
-        let parts: Vec<&str> = path_lower.split('/').collect();
-        if let Some(filename) = parts.last() {
-            if filename.starts_with("round-") && filename.ends_with(".md") {
-                let rest = &filename[6..];
-                if rest.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Check if path is a protected state file.
