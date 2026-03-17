@@ -25,13 +25,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::hook_input::{get_command, get_file_path, read_hook_input, HookInput, HookOutput};
 use crate::{CancelCommands, GateCommands, HookCommands, MonitorCommands, SetupCommands, StopCommands};
 
-static PROMPT_TEMPLATE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../prompt-template");
-static SKILL_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills");
-static HOOK_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../hooks");
-static COMMAND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../commands");
-static AGENT_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../agents");
-static CLAUDE_PLUGIN_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../.claude-plugin");
-static DOC_IMAGE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../docs/images");
+// Vendored runtime assets live inside the CLI crate so `cargo package` and
+// crates.io builds can embed them without depending on workspace-relative paths.
+static PROMPT_TEMPLATE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/prompt-template");
+static SKILL_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
+static HOOK_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/hooks");
+static COMMAND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/commands");
+static AGENT_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/agents");
+static CLAUDE_PLUGIN_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/.claude-plugin");
+static DOC_IMAGE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/docs/images");
 
 /// Handle setup commands.
 pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
