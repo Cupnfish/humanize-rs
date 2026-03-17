@@ -1,2 +1,7 @@
 /target
 docs/plan.md
+# Claude Code settings
+.claude/
+
+# Humanize runtime state
+.humanize/
