@@ -3,8 +3,8 @@
 //! This module provides parsing and serialization for the state.md files
 //! used to track RLCR and PR loop progress.
 //!
-//! IMPORTANT: This schema must EXACTLY match the Bash implementation
-//! in humanize/scripts/setup-rlcr-loop.sh and humanize/hooks/lib/loop-common.sh
+//! IMPORTANT: This schema must remain compatible with the historical shell-era
+//! state contract so existing loop directories continue to parse correctly.
 
 use serde::{Deserialize, Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -98,20 +98,6 @@ pub struct State {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
 
-    // BitLesson fields
-
-    /// Whether BitLesson validation is required.
-    #[serde(default)]
-    pub bitlesson_required: bool,
-
-    /// Path to the BitLesson file (relative to project root).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bitlesson_file: Option<String>,
-
-    /// Whether to allow empty "none" entries in BitLesson.
-    #[serde(default)]
-    pub bitlesson_allow_empty_none: bool,
-
     // PR loop specific fields
 
     /// PR number for PR loops.
@@ -165,7 +151,7 @@ fn default_codex_model() -> String {
 }
 
 fn default_codex_effort() -> String {
-    "high".to_string()
+    "xhigh".to_string()
 }
 
 fn default_codex_timeout() -> u64 {
@@ -200,9 +186,6 @@ impl Default for State {
             session_id: None,
             agent_teams: false,
             started_at: None,
-            bitlesson_required: false,
-            bitlesson_file: None,
-            bitlesson_allow_empty_none: false,
             // PR loop fields
             pr_number: None,
             configured_bots: None,
@@ -336,9 +319,6 @@ impl State {
         ask_codex_question: bool,
         agent_teams: bool,
         review_started: bool,
-        bitlesson_required: bool,
-        bitlesson_file: Option<String>,
-        bitlesson_allow_empty_none: bool,
     ) -> Self {
         let now = chrono_lite_now();
         Self {
@@ -359,9 +339,6 @@ impl State {
             session_id: None,  // Empty initially, filled by PostToolUse hook
             agent_teams,
             started_at: Some(now),
-            bitlesson_required,
-            bitlesson_file,
-            bitlesson_allow_empty_none,
             // PR loop fields (all None for RLCR)
             pr_number: None,
             configured_bots: None,
@@ -711,9 +688,6 @@ Some content below.
             true,
             false,
             false,
-            false,  // bitlesson_required
-            None,   // bitlesson_file
-            false,  // bitlesson_allow_empty_none
         );
 
         let md = original.to_markdown().unwrap();

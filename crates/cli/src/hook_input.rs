@@ -22,17 +22,21 @@ const MAX_JSON_DEPTH: usize = 30;
 #[derive(Debug, Clone, Deserialize)]
 pub struct HookInput {
     /// The tool being invoked (e.g., "Read", "Write", "Bash")
+    #[serde(default)]
     pub tool_name: String,
     /// The tool input parameters
+    #[serde(default)]
     pub tool_input: serde_json::Value,
     /// Session identifier
     #[serde(default)]
     pub session_id: Option<String>,
     /// Tool output (for PostToolUse hooks)
     #[serde(default)]
+    #[allow(dead_code)]
     pub tool_output: Option<serde_json::Value>,
     /// Tool result (for PostToolUse hooks)
     #[serde(default)]
+    #[allow(dead_code)]
     pub tool_result: Option<String>,
 }
 
@@ -70,7 +74,7 @@ impl HookOutput {
 }
 
 /// Read and parse hook input from stdin.
-pub fn read_hook_input() -> Result<HookInput> {
+pub fn read_hook_input(require_tool_name: bool) -> Result<HookInput> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
@@ -87,8 +91,8 @@ pub fn read_hook_input() -> Result<HookInput> {
     // Parse JSON
     let hook_input: HookInput = serde_json::from_str(&input)?;
 
-    // Validate tool_name is present
-    if hook_input.tool_name.is_empty() {
+    // Validate tool_name is present when required.
+    if require_tool_name && hook_input.tool_name.is_empty() {
         bail!("Error: Missing required field: tool_name");
     }
 
@@ -144,11 +148,13 @@ pub fn get_command(input: &HookInput) -> Option<String> {
 }
 
 /// Extract old_string from tool_input (for Edit tool).
+#[allow(dead_code)]
 pub fn get_old_string(input: &HookInput) -> Option<String> {
     get_string_field(input, "old_string")
 }
 
 /// Extract new_string from tool_input (for Edit tool).
+#[allow(dead_code)]
 pub fn get_new_string(input: &HookInput) -> Option<String> {
     get_string_field(input, "new_string")
 }

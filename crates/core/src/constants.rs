@@ -16,7 +16,7 @@ pub const DEFAULT_MAX_ITERATIONS: u32 = 42;
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
 
 /// Default Codex effort level.
-pub const DEFAULT_CODEX_EFFORT: &str = "high";
+pub const DEFAULT_CODEX_EFFORT: &str = "xhigh";
 
 /// Default Codex timeout in seconds.
 pub const DEFAULT_CODEX_TIMEOUT_SECS: u64 = 5400;

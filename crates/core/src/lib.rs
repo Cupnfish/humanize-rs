@@ -8,6 +8,8 @@ pub mod fs;
 pub mod git;
 pub mod hooks;
 pub mod constants;
+pub mod codex;
+pub mod template;
 
 pub use state::State;
 pub use constants::*;
