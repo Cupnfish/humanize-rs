@@ -14,7 +14,8 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 chrono.workspace = true
+wait-timeout.workspace = true
 
 [dev-dependencies]
 # Testing utilities
-tempfile = "3.0"
+tempfile.workspace = true

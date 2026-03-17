@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1116" height="846" viewBox="0 0 1116 846">
+<rect width="100%" height="100%" fill="#0b1020" rx="14"/>
+<rect x="12" y="12" width="1092" height="822" fill="#11182b" stroke="#23314f" stroke-width="1.5" rx="10"/>
+<text x="24" y="36" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="15" fill="#d7e3ff" xml:space="preserve">
+<tspan x="24" y="36">┌Session───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</tspan>
+<tspan x="24" y="57">│Humanize RLCR Monitor  [active]                                                                                       │</tspan>
+<tspan x="24" y="78">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</tspan>
+<tspan x="24" y="99">┌Details───────────────────────────────────────────────────┐┌Context───────────────────────────────────────────────────┐</tspan>
+<tspan x="24" y="120">│State File:                                               ││Start Branch: master                                      │</tspan>
+<tspan x="24" y="141">│/home/cupnfish/humanize/.tmp-monitor-shot/.humanize/rlcr/2││Base Branch: master                                       │</tspan>
+<tspan x="24" y="162">│026-03-17_12-00-00/state.md                               ││Model: gpt-5.4 (xhigh)                                    │</tspan>
+<tspan x="24" y="183">│Round: 4 / 12                                             ││Timeout: 5400s                                            │</tspan>
+<tspan x="24" y="204">│Plan File: plans/plan.md                                  ││Ask Codex: true                                           │</tspan>
+<tspan x="24" y="225">│Summary Preview: # Round 4 Summary                        ││Agent Teams: true                                         │</tspan>
+<tspan x="24" y="246">│                                                          ││                                                          │</tspan>
+<tspan x="24" y="267">│                                                          ││                                                          │</tspan>
+<tspan x="24" y="288">└──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘</tspan>
+<tspan x="24" y="309">┌Latest RLCR Artifact──────────────────────────────────────────────────────────────────────────────────────────────────┐</tspan>
+<tspan x="24" y="330">│# Round 4 Summary                                                                                                     │</tspan>
+<tspan x="24" y="351">│                                                                                                                      │</tspan>
+<tspan x="24" y="372">│Implemented the interactive TUI, follow mode, and live artifact panel.                                                │</tspan>
+<tspan x="24" y="393">│                                                                                                                      │</tspan>
+<tspan x="24" y="414">│                                                                                                                      │</tspan>
+<tspan x="24" y="435">│                                                                                                                      │</tspan>
+<tspan x="24" y="456">│                                                                                                                      │</tspan>
+<tspan x="24" y="477">│                                                                                                                      │</tspan>
+<tspan x="24" y="498">│                                                                                                                      │</tspan>
+<tspan x="24" y="519">│                                                                                                                      │</tspan>
+<tspan x="24" y="540">│                                                                                                                      │</tspan>
+<tspan x="24" y="561">│                                                                                                                      │</tspan>
+<tspan x="24" y="582">│                                                                                                                      │</tspan>
+<tspan x="24" y="603">│                                                                                                                      │</tspan>
+<tspan x="24" y="624">│                                                                                                                      │</tspan>
+<tspan x="24" y="645">│                                                                                                                      │</tspan>
+<tspan x="24" y="666">│                                                                                                                      │</tspan>
+<tspan x="24" y="687">│                                                                                                                      │</tspan>
+<tspan x="24" y="708">│                                                                                                                      │</tspan>
+<tspan x="24" y="729">│                                                                                                                      │</tspan>
+<tspan x="24" y="750">│                                                                                                                      │</tspan>
+<tspan x="24" y="771">└/home/cupnfish/humanize/.tmp-monitor-shot/.humanize/rlcr/2026-03-17_12-00-00/round-4-summary.md───────────────────────┘</tspan>
+<tspan x="24" y="792">┌Controls──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</tspan>
+<tspan x="24" y="813">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</tspan>
+</text>
+</svg>

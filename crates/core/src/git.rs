@@ -4,9 +4,9 @@
 //! commit SHA retrieval, and repository status checks.
 
 use std::path::Path;
-use std::process::Command;
-#[allow(unused_imports)]
+use std::process::{Command, Stdio};
 use std::time::Duration;
+use wait_timeout::ChildExt;
 
 /// Default timeout for git commands (in seconds).
 const DEFAULT_GIT_TIMEOUT_SECS: u64 = 30;
@@ -190,17 +190,27 @@ pub fn get_git_status<P: AsRef<Path>>(repo_path: P) -> Result<GitStatus, GitErro
 fn run_git_command(
     repo_path: &Path,
     args: &[&str],
-    _timeout_secs: u64,
+    timeout_secs: u64,
 ) -> Result<String, GitError> {
     let mut cmd = Command::new("git");
     cmd.args(["-C", repo_path.to_str().unwrap_or(".")])
-        .args(args);
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    // Note: Rust's std::process::Command doesn't have built-in timeout
-    // For production, consider using wait_timeout crate or spawn + wait_with_timeout
-    let output = cmd.output()?;
+    let mut child = cmd.spawn()?;
+    let timeout = Duration::from_secs(timeout_secs);
+    let status = match child.wait_timeout(timeout)? {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitError::Timeout);
+        }
+    };
+    let output = child.wait_with_output()?;
 
-    if output.status.success() {
+    if status.success() {
         String::from_utf8(output.stdout)
             .map_err(|e| GitError::InvalidOutput(e.to_string()))
     } else {
