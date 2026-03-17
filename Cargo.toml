@@ -11,7 +11,7 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["Humanize Contributors"]
 license = "MIT"
-repository = "https://github.com/cupnfish/humanize"
+repository = "https://github.com/Cupnfish/humanize-rs"
 
 [workspace.dependencies]
 # Error handling
