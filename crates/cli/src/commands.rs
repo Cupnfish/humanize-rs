@@ -617,7 +617,7 @@ fn validate_bash(input: &HookInput) -> HookOutput {
 }
 
 /// Validate plan file path.
-fn validate_plan_file(input: &HookInput) -> HookOutput {
+fn validate_plan_file(_input: &HookInput) -> HookOutput {
     // The plan-file validator is actually a UserPromptSubmit hook
     // that checks git state consistency, not just the plan path.
     // For now, allow everything.
@@ -735,11 +735,10 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
 
         // Write patched content atomically
         let temp_path = format!("{}.tmp.{}", state_file_path, std::process::id());
-        if std::fs::write(&temp_path, patched).is_ok() {
-            if std::fs::rename(&temp_path, state_file_path).is_err() {
+        if std::fs::write(&temp_path, patched).is_ok()
+            && std::fs::rename(&temp_path, state_file_path).is_err() {
                 let _ = std::fs::remove_file(&temp_path);
             }
-        }
     }
 
     // Remove signal file (one-shot: session_id is now recorded)
@@ -751,11 +750,10 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
 /// Check if path is a protected state file.
 fn is_protected_state_file(path_lower: &str) -> bool {
     // Check for state.md in .humanize/rlcr/*/ or .humanize/pr-loop/*/
-    if path_lower.contains(".humanize/rlcr/") || path_lower.contains(".humanize/pr-loop/") {
-        if path_lower.ends_with("/state.md") {
+    if (path_lower.contains(".humanize/rlcr/") || path_lower.contains(".humanize/pr-loop/"))
+        && path_lower.ends_with("/state.md") {
             return true;
         }
-    }
     false
 }
 
