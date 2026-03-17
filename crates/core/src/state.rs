@@ -285,7 +285,7 @@ impl State {
         // Validate required fields per loop-common.sh parse_state_file_strict
         let required_fields = ["current_round", "max_iterations", "review_started", "base_branch"];
         for field in &required_fields {
-            if !mapping.contains_key(&serde_yaml::Value::String(field.to_string())) {
+            if !mapping.contains_key(serde_yaml::Value::String(field.to_string())) {
                 return Err(StateError::MissingRequiredField(field.to_string()));
             }
         }
