@@ -12,6 +12,8 @@ This repository is a Rust rewrite of the original Humanize project:
 
 The workflow model remains compatible, but the implementation and runtime orchestration are now handled by Rust.
 
+For Claude Code plugin packaging, the plugin package name is `humanize-rs`.
+
 ## Overview
 
 Humanize provides three main workflow families:
@@ -42,7 +44,6 @@ State is stored under `.humanize/` in the working project:
 - `commands/`: command definitions for plugin/skill runtimes
 - `agents/`: supporting agent definitions
 - `docs/`: installation and usage docs
-- `shims/`: optional compatibility shims that call `humanize` from `PATH`
 
 ## Runtime Assets
 
@@ -120,6 +121,18 @@ humanize --help
 Install the runtime assets into a plugin root:
 
 ```bash
+humanize install
+```
+
+Default plugin-root detection order:
+
+1. `--plugin-root <path>` if provided
+2. `CLAUDE_PLUGIN_ROOT` if set
+3. current working directory
+
+If you want to force a specific target:
+
+```bash
 humanize install --plugin-root "$PWD"
 ```
 
@@ -139,26 +152,26 @@ It does **not** copy the executable. The executable must already be available on
 For Codex:
 
 ```bash
-humanize install-skills --target codex
+humanize install --target codex
 ```
 
 For Kimi:
 
 ```bash
-humanize install-skills --target kimi
+humanize install --target kimi
 ```
 
 Useful variants:
 
 ```bash
 # both targets
-humanize install-skills --target both
+humanize install --target all
 
 # custom target directory
-humanize install-skills --target codex --skills-dir /tmp/my-skills
+humanize install --target codex --skills-dir /tmp/my-skills
 
 # preview only
-humanize install-skills --target codex --dry-run
+humanize install --target codex --dry-run
 ```
 
 Default skill install locations:
@@ -326,9 +339,9 @@ Examples:
 Update skill definitions in `skills/`, then reinstall:
 
 ```bash
-humanize install-skills --target codex
+humanize install --target codex
 # or
-humanize install-skills --target kimi
+humanize install --target kimi
 ```
 
 ## Additional Documentation

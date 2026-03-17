@@ -3,7 +3,7 @@
 Install hydrated skills for the Codex runtime:
 
 ```bash
-cargo run -- install-skills --target codex
+humanize install --target codex
 ```
 
 Default install location:
@@ -19,10 +19,8 @@ Installed skills:
 - `humanize-gen-plan`
 - `humanize-rlcr`
 
-The installer also places the runtime binary under:
+The installer does **not** place a binary under the skills directory.
+Installed skills expect:
 
-```text
-<skills-dir>/humanize/bin/humanize
-```
-
-and rewrites installed `SKILL.md` files to call that binary directly.
+- `humanize` on `PATH`
+- runtime assets under `<skills-dir>/humanize/`

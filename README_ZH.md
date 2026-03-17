@@ -10,6 +10,8 @@ English version: [README.md](./README.md)
 
 - 原项目：<https://github.com/humania-org/humanize/tree/main>
 
+Claude Code 插件打包名称现在是 `humanize-rs`。
+
 ## 概览
 
 Humanize 提供三类核心能力：
@@ -40,7 +42,6 @@ RLCR 工作流：
 - `commands/`：命令定义
 - `agents/`：辅助 agent 定义
 - `docs/`：安装与使用文档
-- `shims/`：可选兼容 shim
 
 ## 安装方式
 
@@ -81,6 +82,18 @@ humanize --help
 ### 2. 安装运行时 assets
 
 ```bash
+humanize install
+```
+
+默认探测顺序：
+
+1. 如果传了 `--plugin-root <path>`，优先使用它
+2. 否则如果设置了 `CLAUDE_PLUGIN_ROOT`，使用该路径
+3. 否则使用当前工作目录
+
+如果你想强制安装到指定目录：
+
+```bash
 humanize install --plugin-root "$PWD"
 ```
 
@@ -101,13 +114,13 @@ binary 必须已经在 `PATH` 上。
 Codex:
 
 ```bash
-humanize install-skills --target codex
+humanize install --target codex
 ```
 
 Kimi:
 
 ```bash
-humanize install-skills --target kimi
+humanize install --target kimi
 ```
 
 如果当前机器上还没有把 `humanize` 装到 `PATH`，本地开发时也可以临时用 `cargo run -- ...` 代替。
@@ -177,7 +190,7 @@ humanize monitor rlcr
 - 提示词模板：`prompt-template/`
 - skill 源文件：`skills/`
 
-改完模板或 skill 后，重新执行 `install` / `install-skills` 即可。
+改完模板或 skill 后，重新执行 `install --target ...` 即可。
 
 ## 其他文档
 

@@ -14,7 +14,7 @@ fn install_skills_syncs_runtime_and_hydrates_skill_files() {
 
     let output = Command::new(bin())
         .args([
-            "install-skills",
+            "install",
             "--target",
             "codex",
             "--skills-dir",
@@ -55,7 +55,7 @@ fn install_skills_dry_run_does_not_write() {
 
     let output = Command::new(bin())
         .args([
-            "install-skills",
+            "install",
             "--target",
             "kimi",
             "--skills-dir",

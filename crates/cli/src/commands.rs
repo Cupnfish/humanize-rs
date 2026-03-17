@@ -6,6 +6,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use include_dir::{include_dir, Dir};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,6 +24,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::hook_input::{get_command, get_file_path, read_hook_input, HookInput, HookOutput};
 use crate::{CancelCommands, GateCommands, HookCommands, MonitorCommands, SetupCommands, StopCommands};
+
+static PROMPT_TEMPLATE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../prompt-template");
+static SKILL_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills");
+static HOOK_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../hooks");
+static COMMAND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../commands");
+static AGENT_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../agents");
+static CLAUDE_PLUGIN_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../.claude-plugin");
+static DOC_IMAGE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../docs/images");
 
 /// Handle setup commands.
 pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
@@ -5865,53 +5874,117 @@ pub fn handle_monitor(cmd: MonitorCommands) -> Result<()> {
     }
 }
 
-/// Install the current binary into the plugin root's bin directory.
-pub fn handle_install(plugin_root: Option<&str>) -> Result<()> {
-    let plugin_root = match plugin_root {
-        Some(path) => PathBuf::from(path),
-        None => resolve_plugin_root()?,
-    };
-    let source_root = runtime_components_source_root()?;
-    for component in ["prompt-template", "hooks", "commands", "agents", "skills", ".claude-plugin"] {
-        let src = source_root.join(component);
-        if !src.exists() {
-            continue;
+pub fn handle_install(
+    target: &str,
+    plugin_root: Option<&str>,
+    skills_dir: Option<&str>,
+    kimi_skills_dir: Option<&str>,
+    codex_skills_dir: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let target = target.to_ascii_lowercase();
+    if !matches!(target.as_str(), "claude" | "codex" | "kimi" | "all") {
+        bail!("--target must be one of: claude, codex, kimi, all");
+    }
+
+    let mut kimi_dir = kimi_skills_dir
+        .map(PathBuf::from)
+        .unwrap_or(default_kimi_skills_dir()?);
+    let mut codex_dir = codex_skills_dir
+        .map(PathBuf::from)
+        .unwrap_or(default_codex_skills_dir()?);
+
+    if let Some(legacy_dir) = skills_dir {
+        let legacy = PathBuf::from(legacy_dir);
+        match target.as_str() {
+            "kimi" => kimi_dir = legacy,
+            "codex" => codex_dir = legacy,
+            "all" => {
+                kimi_dir = legacy.clone();
+                codex_dir = legacy;
+            }
+            _ => {}
         }
-        let dst = plugin_root.join(component);
-        remove_dir_if_exists(&dst)?;
-        copy_dir_recursive(&src, &dst)?;
     }
-    if source_root.join("docs/images").is_dir() {
-        remove_dir_if_exists(&plugin_root.join("docs/images"))?;
-        copy_dir_recursive(&source_root.join("docs/images"), &plugin_root.join("docs/images"))?;
+
+    match target.as_str() {
+        "claude" => {
+            let plugin_root = detect_install_plugin_root(plugin_root)?;
+            install_runtime_assets_into(&plugin_root, dry_run)?;
+        }
+        "codex" => install_skills_into(&codex_dir, dry_run)?,
+        "kimi" => install_skills_into(&kimi_dir, dry_run)?,
+        "all" => {
+            let plugin_root = detect_install_plugin_root(plugin_root)?;
+            install_runtime_assets_into(&plugin_root, dry_run)?;
+            install_skills_into(&codex_dir, dry_run)?;
+            if kimi_dir != codex_dir {
+                install_skills_into(&kimi_dir, dry_run)?;
+            }
+        }
+        _ => unreachable!(),
     }
-    println!("Installed runtime assets to {}", plugin_root.display());
-    println!("Ensure `humanize` is installed on PATH before using the plugin.");
+
+    println!("Ensure `humanize` is installed on PATH before using the installed assets.");
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let target = dst.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_recursive(&path, &target)?;
-        } else {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&path, &target)?;
+fn install_runtime_assets_into(plugin_root: &Path, dry_run: bool) -> Result<()> {
+    copy_embedded_dir(&PROMPT_TEMPLATE_ASSETS, &plugin_root.join("prompt-template"), dry_run)?;
+    copy_embedded_dir(&HOOK_ASSETS, &plugin_root.join("hooks"), dry_run)?;
+    copy_embedded_dir(&COMMAND_ASSETS, &plugin_root.join("commands"), dry_run)?;
+    copy_embedded_dir(&AGENT_ASSETS, &plugin_root.join("agents"), dry_run)?;
+    copy_embedded_dir(&SKILL_ASSETS, &plugin_root.join("skills"), dry_run)?;
+    copy_embedded_dir(&CLAUDE_PLUGIN_ASSETS, &plugin_root.join(".claude-plugin"), dry_run)?;
+    copy_embedded_dir(&DOC_IMAGE_ASSETS, &plugin_root.join("docs/images"), dry_run)?;
+    println!("Using plugin root: {}", plugin_root.display());
+    println!("Installed runtime assets to {}", plugin_root.display());
+    Ok(())
+}
+
+fn detect_install_plugin_root(plugin_root: Option<&str>) -> Result<PathBuf> {
+    if let Some(path) = plugin_root {
+        return Ok(PathBuf::from(path));
+    }
+
+    if let Ok(path) = std::env::var("CLAUDE_PLUGIN_ROOT") {
+        if !path.trim().is_empty() {
+            return Ok(PathBuf::from(path));
         }
     }
-    Ok(())
+
+    Ok(std::env::current_dir()?)
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path)?;
     }
+    Ok(())
+}
+
+fn copy_embedded_dir(dir: &Dir<'_>, dst: &Path, dry_run: bool) -> Result<()> {
+    if dry_run {
+        println!("DRY-RUN sync embedded dir -> {}", dst.display());
+        return Ok(());
+    }
+
+    remove_dir_if_exists(dst)?;
+
+    for file in dir.files() {
+        let relative = file.path().strip_prefix(dir.path()).unwrap_or(file.path());
+        let target = dst.join(relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(target, file.contents())?;
+    }
+
+    for subdir in dir.dirs() {
+        let relative = subdir.path().strip_prefix(dir.path()).unwrap_or(subdir.path());
+        copy_embedded_dir(subdir, &dst.join(relative), dry_run)?;
+    }
+
     Ok(())
 }
 
@@ -5946,17 +6019,6 @@ fn rewrite_skill_content(content: &str, runtime_root: &Path) -> String {
     strip_user_invocable_frontmatter(&rendered)
 }
 
-fn sync_skill_source(skill_name: &str, src_root: &Path, dst_root: &Path, dry_run: bool) -> Result<()> {
-    let src = src_root.join(skill_name);
-    let dst = dst_root.join(skill_name);
-    if dry_run {
-        println!("DRY-RUN sync {} -> {}", src.display(), dst.display());
-        return Ok(());
-    }
-    remove_dir_if_exists(&dst)?;
-    copy_dir_recursive(&src, &dst)
-}
-
 fn hydrate_installed_skill(skill_file: &Path, runtime_root: &Path, dry_run: bool) -> Result<()> {
     if dry_run {
         println!("DRY-RUN hydrate {}", skill_file.display());
@@ -5981,19 +6043,9 @@ fn default_codex_skills_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".codex/skills"))
 }
 
-fn runtime_components_source_root() -> Result<PathBuf> {
-    resolve_plugin_root()
-}
-
 fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
-    let source_root = runtime_components_source_root()?;
-    let skills_source = source_root.join("skills");
     let runtime_root = skills_dir.join("humanize");
     let skill_names = ["ask-codex", "humanize", "humanize-gen-plan", "humanize-rlcr"];
-
-    if !skills_source.is_dir() {
-        bail!("Skills source directory not found: {}", skills_source.display());
-    }
 
     if dry_run {
         println!("DRY-RUN target skills dir: {}", skills_dir.display());
@@ -6002,14 +6054,21 @@ fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
     }
 
     for skill_name in &skill_names {
-        sync_skill_source(skill_name, &skills_source, skills_dir, dry_run)?;
+        let Some(skill_dir) = SKILL_ASSETS.get_dir(skill_name) else {
+            bail!("Embedded skill directory not found: {}", skill_name);
+        };
+        let dst = skills_dir.join(skill_name);
+        if dry_run {
+            println!("DRY-RUN sync embedded skill {} -> {}", skill_name, dst.display());
+        } else {
+            copy_embedded_dir(skill_dir, &dst, false)?;
+        }
     }
 
     if dry_run {
         println!("DRY-RUN sync prompt-template -> {}", runtime_root.join("prompt-template").display());
     } else {
-        remove_dir_if_exists(&runtime_root.join("prompt-template"))?;
-        copy_dir_recursive(&source_root.join("prompt-template"), &runtime_root.join("prompt-template"))?;
+        copy_embedded_dir(&PROMPT_TEMPLATE_ASSETS, &runtime_root.join("prompt-template"), false)?;
     }
 
     for skill_name in &skill_names {
@@ -6019,54 +6078,6 @@ fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
     println!("Skills synced to {}", skills_dir.display());
     println!("Runtime root: {}", runtime_root.display());
     println!("Ensure `humanize` is installed on PATH before using the installed skills.");
-    Ok(())
-}
-
-/// Install Humanize skills for Codex/Kimi runtimes.
-pub fn handle_install_skills(
-    target: &str,
-    skills_dir: Option<&str>,
-    kimi_skills_dir: Option<&str>,
-    codex_skills_dir: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
-    let target = target.to_ascii_lowercase();
-    if !matches!(target.as_str(), "kimi" | "codex" | "both") {
-        bail!("--target must be one of: kimi, codex, both");
-    }
-
-    let mut kimi_dir = kimi_skills_dir
-        .map(PathBuf::from)
-        .unwrap_or(default_kimi_skills_dir()?);
-    let mut codex_dir = codex_skills_dir
-        .map(PathBuf::from)
-        .unwrap_or(default_codex_skills_dir()?);
-
-    if let Some(legacy_dir) = skills_dir {
-        let legacy = PathBuf::from(legacy_dir);
-        match target.as_str() {
-            "kimi" => kimi_dir = legacy,
-            "codex" => codex_dir = legacy,
-            "both" => {
-                kimi_dir = legacy.clone();
-                codex_dir = legacy;
-            }
-            _ => {}
-        }
-    }
-
-    match target.as_str() {
-        "kimi" => install_skills_into(&kimi_dir, dry_run)?,
-        "codex" => install_skills_into(&codex_dir, dry_run)?,
-        "both" => {
-            install_skills_into(&kimi_dir, dry_run)?;
-            if codex_dir != kimi_dir {
-                install_skills_into(&codex_dir, dry_run)?;
-            }
-        }
-        _ => unreachable!(),
-    }
-
     Ok(())
 }
 

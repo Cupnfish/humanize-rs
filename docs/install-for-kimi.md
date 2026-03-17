@@ -3,7 +3,7 @@
 Install hydrated skills for the Kimi runtime:
 
 ```bash
-cargo run -- install-skills --target kimi
+humanize install --target kimi
 ```
 
 Default install location:
@@ -19,10 +19,8 @@ Installed skills:
 - `humanize-gen-plan`
 - `humanize-rlcr`
 
-The installer writes the runtime binary to:
+The installer does **not** write a binary into the skills directory.
+Installed skills expect:
 
-```text
-<skills-dir>/humanize/bin/humanize
-```
-
-and installed skills invoke that binary directly.
+- `humanize` on `PATH`
+- runtime assets under `<skills-dir>/humanize/`

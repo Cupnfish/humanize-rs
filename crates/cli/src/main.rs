@@ -40,28 +40,25 @@ enum Commands {
     #[command(subcommand)]
     Monitor(MonitorCommands),
 
-    /// Install runtime assets into a plugin root
+    /// Install runtime assets and/or skills
     Install {
-        /// Plugin root directory for prompt-template/, hooks/, commands/, agents/, and skills/
-        #[arg(long)]
-        plugin_root: Option<String>,
-    },
-
-    /// Install Humanize skills into Codex/Kimi skill directories
-    InstallSkills {
-        /// Target runtime(s): kimi, codex, or both
-        #[arg(long, default_value = "kimi")]
+        /// Install target: claude, codex, kimi, or all
+        #[arg(long, default_value = "claude")]
         target: String,
 
-        /// Legacy alias for the target skills directory
+        /// Plugin root directory override (used for claude/all)
+        #[arg(long)]
+        plugin_root: Option<String>,
+
+        /// Shared skills directory override (used for codex/kimi/all)
         #[arg(long)]
         skills_dir: Option<String>,
 
-        /// Kimi skills directory
+        /// Kimi skills directory override
         #[arg(long)]
         kimi_skills_dir: Option<String>,
 
-        /// Codex skills directory
+        /// Codex skills directory override
         #[arg(long)]
         codex_skills_dir: Option<String>,
 
@@ -291,15 +288,16 @@ fn main() -> Result<()> {
         Commands::Hook(hook_cmd) => commands::handle_hook(hook_cmd),
         Commands::Stop(stop_cmd) => commands::handle_stop(stop_cmd),
         Commands::Monitor(monitor_cmd) => commands::handle_monitor(monitor_cmd),
-        Commands::Install { plugin_root } => commands::handle_install(plugin_root.as_deref()),
-        Commands::InstallSkills {
+        Commands::Install {
             target,
+            plugin_root,
             skills_dir,
             kimi_skills_dir,
             codex_skills_dir,
             dry_run,
-        } => commands::handle_install_skills(
+        } => commands::handle_install(
             &target,
+            plugin_root.as_deref(),
             skills_dir.as_deref(),
             kimi_skills_dir.as_deref(),
             codex_skills_dir.as_deref(),

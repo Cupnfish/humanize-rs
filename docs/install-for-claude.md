@@ -1,6 +1,7 @@
 # Install for Claude Code
 
-This repository now uses the native Rust `humanize` binary as the runtime.
+This repository exposes the Claude plugin package as `humanize-rs`.
+The runtime executable itself remains `humanize` on `PATH`.
 
 ## Local Development
 
@@ -10,13 +11,7 @@ From the repository root:
 export CLAUDE_PLUGIN_ROOT="$PWD"
 export CLAUDE_PROJECT_DIR="$PWD"
 cargo build --release
-cargo run -- install --plugin-root "$PWD"
-```
-
-This installs the executable at:
-
-```text
-bin/humanize
+humanize install --target claude --plugin-root "$PWD"
 ```
 
 Claude hook configuration is in:
@@ -25,11 +20,11 @@ Claude hook configuration is in:
 hooks/hooks.json
 ```
 
-and points directly at `bin/humanize`.
+and points directly at `humanize` on `PATH`.
 
 ## Validate
 
 ```bash
-./bin/humanize --help
+humanize --help
 cat hooks/hooks.json
 ```

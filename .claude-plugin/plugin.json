@@ -1,6 +1,6 @@
 {
-  "name": "humanize",
-  "description": "Humanize - An iterative development plugin that uses Codex to review Claude's work. Creates a feedback loop where Claude implements plans and Codex independently reviews progress, ensuring quality through continuous refinement.",
+  "name": "humanize-rs",
+  "description": "Humanize RS - Rust implementation of the Humanize iterative development workflow with independent Codex review.",
   "version": "0.1.0",
   "author": {
     "name": "Cupnfish"
