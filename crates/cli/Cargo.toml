@@ -1,10 +1,11 @@
 [package]
-name = "humanize"
+name = "humanize-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "CLI for the Humanize Claude Code plugin"
 
 [[bin]]

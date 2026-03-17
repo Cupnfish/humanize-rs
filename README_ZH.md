@@ -52,8 +52,16 @@ RLCR 工作流：
 
 ### 1. 安装 `humanize`
 
+从 crates.io 安装：
+
 ```bash
-cargo install --path .
+cargo install humanize-cli --bin humanize
+```
+
+从当前仓库安装：
+
+```bash
+cargo install --path crates/cli --bin humanize
 ```
 
 或手动把 release binary 放到 `PATH`：

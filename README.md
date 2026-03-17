@@ -89,10 +89,16 @@ The recommended model is:
 
 ### 1. Install `humanize` on `PATH`
 
-From the repository root:
+From crates.io:
 
 ```bash
-cargo install --path .
+cargo install humanize-cli --bin humanize
+```
+
+From this repository:
+
+```bash
+cargo install --path crates/cli --bin humanize
 ```
 
 Or build a release binary and place it on `PATH` manually:

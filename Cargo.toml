@@ -36,4 +36,4 @@ wait-timeout = "0.2"
 tempfile = "3.27"
 
 # Internal crates
-humanize-core = { path = "crates/core" }
+humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.1.0" }
