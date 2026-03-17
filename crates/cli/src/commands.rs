@@ -40,7 +40,7 @@ pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
             let plugin_root = std::env::var("CLAUDE_PLUGIN_ROOT")
                 .unwrap_or_else(|_| "/home/cupnfish/.claude/plugins/cache/humania/humanize/1.15.0".to_string());
 
-            let setup_script = format!("{}/humanize/scripts/setup-rlcr-loop.sh", plugin_root);
+            let setup_script = format!("{}/scripts/setup-rlcr-loop.sh", plugin_root);
 
             // Execute the shell script
             let status = std::process::Command::new(&setup_script)
@@ -71,7 +71,7 @@ pub fn handle_cancel(cmd: CancelCommands) -> Result<()> {
             let plugin_root = std::env::var("CLAUDE_PLUGIN_ROOT")
                 .unwrap_or_else(|_| "/home/cupnfish/.claude/plugins/cache/humania/humanize/1.15.0".to_string());
 
-            let cancel_script = format!("{}/humanize/scripts/cancel-rlcr-loop.sh", plugin_root);
+            let cancel_script = format!("{}/scripts/cancel-rlcr-loop.sh", plugin_root);
 
             let status = std::process::Command::new(&cancel_script)
                 .current_dir(&project_root)
@@ -95,9 +95,9 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
     let input = match read_hook_input() {
         Ok(i) => i,
         Err(e) => {
-            // If stdin is empty or invalid, allow by default
-            eprintln!("Warning: Could not parse hook input: {}", e);
-            HookOutput::allow().print();
+            // SECURITY: Fail closed on malformed input - block the operation
+            eprintln!("Error: Could not parse hook input: {}", e);
+            HookOutput::block(format!("Hook input validation failed: {}", e)).print();
             return Ok(());
         }
     };
@@ -333,7 +333,7 @@ pub fn handle_ask_codex(prompt: &str, model: &str, effort: &str, timeout: u64) -
     let plugin_root = std::env::var("CLAUDE_PLUGIN_ROOT")
         .unwrap_or_else(|_| "/home/cupnfish/.claude/plugins/cache/humania/humanize/1.15.0".to_string());
 
-    let ask_script = format!("{}/humanize/scripts/ask-codex.sh", plugin_root);
+    let ask_script = format!("{}/scripts/ask-codex.sh", plugin_root);
 
     let status = std::process::Command::new(&ask_script)
         .arg(prompt)
@@ -358,7 +358,7 @@ pub fn handle_gen_plan(input: &str, output: &str) -> Result<()> {
     let plugin_root = std::env::var("CLAUDE_PLUGIN_ROOT")
         .unwrap_or_else(|_| "/home/cupnfish/.claude/plugins/cache/humania/humanize/1.15.0".to_string());
 
-    let validate_script = format!("{}/humanize/scripts/validate-gen-plan-io.sh", plugin_root);
+    let validate_script = format!("{}/scripts/validate-gen-plan-io.sh", plugin_root);
 
     let status = std::process::Command::new(&validate_script)
         .arg("--input")
