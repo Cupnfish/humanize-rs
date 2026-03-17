@@ -7,7 +7,7 @@
 //! in humanize/scripts/setup-rlcr-loop.sh and humanize/hooks/lib/loop-common.sh
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::constants::{YAML_FRONTMATTER_END, YAML_FRONTMATTER_START};
 
@@ -402,6 +402,122 @@ impl State {
             _ => "unexpected-state.md",
         }
     }
+
+    /// Rename state file to terminal state file.
+    ///
+    /// This implements the end-loop rename behavior from loop-common.sh:
+    /// After determining the exit reason, rename state.md to <reason>-state.md
+    pub fn rename_to_terminal<P: AsRef<Path>>(
+        state_path: P,
+        reason: &str,
+    ) -> Result<PathBuf, StateError> {
+        let state_path = state_path.as_ref();
+        let dir = state_path
+            .parent()
+            .ok_or_else(|| StateError::IoError("Cannot determine parent directory".to_string()))?;
+        let terminal_name = Self::terminal_state_filename(reason);
+        let terminal_path = dir.join(terminal_name);
+
+        std::fs::rename(state_path, &terminal_path)
+            .map_err(|e| StateError::IoError(e.to_string()))?;
+
+        Ok(terminal_path)
+    }
+}
+
+/// Find the active RLCR loop directory.
+///
+/// Searches for an active loop (one with state.md, not a terminal state file).
+/// Matches loop-common.sh find_active_loop behavior.
+pub fn find_active_loop(
+    base_dir: &Path,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
+    if !base_dir.exists() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(base_dir).ok()?;
+    for entry in entries.flatten() {
+        let loop_dir = entry.path();
+        if !loop_dir.is_dir() {
+            continue;
+        }
+
+        // Check for active state file (state.md, not terminal)
+        let state_file = loop_dir.join("state.md");
+        if state_file.exists() {
+            // If session_id provided, verify it matches
+            if let Some(sid) = session_id {
+                if let Ok(content) = std::fs::read_to_string(&state_file) {
+                    if let Ok(state) = State::from_markdown(&content) {
+                        if state.session_id.as_deref() == Some(sid) {
+                            return Some(loop_dir);
+                        }
+                    }
+                }
+            } else {
+                // No session filter, return first active loop
+                return Some(loop_dir);
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolve the active state file in a loop directory.
+///
+/// Returns state.md if it exists, otherwise checks for terminal states.
+/// Matches loop-common.sh resolve_active_state_file behavior.
+pub fn resolve_active_state_file(loop_dir: &Path) -> Option<PathBuf> {
+    let state_file = loop_dir.join("state.md");
+    if state_file.exists() {
+        return Some(state_file);
+    }
+
+    // Check for terminal states
+    let terminal_states = [
+        "complete-state.md",
+        "cancel-state.md",
+        "maxiter-state.md",
+        "stop-state.md",
+        "unexpected-state.md",
+        "approve-state.md",
+        "merged-state.md",
+        "closed-state.md",
+    ];
+
+    for terminal in &terminal_states {
+        let path = loop_dir.join(terminal);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// Resolve any state file (active or terminal) in a loop directory.
+///
+/// Returns the first state file found, preferring active state.md.
+/// Matches loop-common.sh resolve_any_state_file behavior.
+pub fn resolve_any_state_file(loop_dir: &Path) -> Option<PathBuf> {
+    resolve_active_state_file(loop_dir)
+}
+
+/// Check if a loop is in finalize phase.
+///
+/// A loop is in finalize phase if it has a finalize-state.md file.
+pub fn is_finalize_phase(loop_dir: &Path) -> bool {
+    loop_dir.join("finalize-state.md").exists()
+}
+
+/// Check if a loop has a pending session handshake.
+///
+/// Returns true if .pending-session-id signal file exists.
+pub fn has_pending_session(project_root: &Path) -> bool {
+    project_root.join(".humanize/.pending-session-id").exists()
 }
 
 /// Generate a timestamp in ISO 8601 format (UTC).
