@@ -232,6 +232,13 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
 }
 
 /// Handle PostToolUse hook for session handshake.
+///
+/// This implements the session handshake from loop-post-bash-hook.sh:
+/// 1. Reads .pending-session-id signal file (2 lines: state path, command signature)
+/// 2. Verifies bash command starts with command signature (boundary-aware match)
+/// 3. Extracts session_id from hook input
+/// 4. Patches state.md by replacing empty session_id with actual value
+/// 5. Removes signal file (one-shot mechanism)
 fn handle_post_tool_use(input: &HookInput) -> HookOutput {
     // Only process Bash tool
     if input.tool_name != "Bash" {
@@ -258,28 +265,86 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
 
     let lines: Vec<&str> = content.lines().collect();
     if lines.len() < 2 {
+        // Malformed signal file - clean up and exit
+        let _ = std::fs::remove_file(&pending_file);
         return HookOutput::allow();
     }
 
-    let state_file = lines[0];
-    let _expected_cmd = lines[1];
+    let state_file_path = lines[0];
+    let command_signature = lines[1];
 
-    // Check if the bash command matches
-    let command = get_command(input).unwrap_or_default();
-    if !command.contains(_expected_cmd) {
+    // Validate state file exists
+    if state_file_path.is_empty() || !std::path::Path::new(state_file_path).exists() {
+        let _ = std::fs::remove_file(&pending_file);
         return HookOutput::allow();
     }
 
-    // Get session_id
-    let session_id = match &input.session_id {
-        Some(s) => s.clone(),
+    // Get the bash command from tool input
+    let command = match get_command(input) {
+        Some(c) => c,
         None => return HookOutput::allow(),
     };
 
-    // Update state file with session_id
-    // TODO: Implement proper state file patching
+    // Boundary-aware match: command must start with signature followed by
+    // end-of-string or whitespace (prevents substring false positives)
+    let is_setup_invocation = {
+        // Check quoted form: "signature" or "signature" followed by space/tab
+        let quoted = format!("\"{}\"", command_signature);
+        command == quoted || command.starts_with(&format!("{} ", quoted)) || command.starts_with(&format!("{}\t", quoted))
+            ||
+        // Check unquoted form: signature or signature followed by space/tab
+        command == command_signature || command.starts_with(&format!("{} ", command_signature)) || command.starts_with(&format!("{}\t", command_signature))
+    };
 
-    // Remove signal file
+    if !is_setup_invocation {
+        // This bash event is not from the setup script - don't consume signal
+        return HookOutput::allow();
+    }
+
+    // Get session_id from hook input
+    let session_id = match &input.session_id {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => return HookOutput::allow(), // No session_id available, leave signal for next attempt
+    };
+
+    // Read current state file
+    let state_content = match std::fs::read_to_string(state_file_path) {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = std::fs::remove_file(&pending_file);
+            return HookOutput::allow();
+        }
+    };
+
+    // Check if session_id is currently empty (safety check)
+    let has_empty_session_id = state_content
+        .lines()
+        .any(|line| line == "session_id:" || line == "session_id: " || line == "session_id: ~" || line == "session_id: null");
+
+    if has_empty_session_id {
+        // Patch state.md by replacing empty session_id with actual value
+        let patched = state_content
+            .lines()
+            .map(|line| {
+                if line == "session_id:" || line == "session_id: " || line == "session_id: ~" || line == "session_id: null" {
+                    format!("session_id: {}", session_id)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Write patched content atomically
+        let temp_path = format!("{}.tmp.{}", state_file_path, std::process::id());
+        if std::fs::write(&temp_path, patched).is_ok() {
+            if std::fs::rename(&temp_path, state_file_path).is_err() {
+                let _ = std::fs::remove_file(&temp_path);
+            }
+        }
+    }
+
+    // Remove signal file (one-shot: session_id is now recorded)
     let _ = std::fs::remove_file(&pending_file);
 
     HookOutput::allow()

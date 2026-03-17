@@ -240,6 +240,50 @@ impl State {
         Ok(state)
     }
 
+    /// Parse state from markdown with strict validation of required fields.
+    ///
+    /// This matches the shell behavior in loop-common.sh parse_state_file_strict()
+    /// which rejects missing required fields: current_round, max_iterations,
+    /// review_started, and base_branch.
+    pub fn from_markdown_strict(content: &str) -> Result<Self, StateError> {
+        let content = content.trim();
+
+        // Check for YAML frontmatter start
+        if !content.starts_with(YAML_FRONTMATTER_START) {
+            return Err(StateError::MissingFrontmatter);
+        }
+
+        // Find the closing delimiter
+        let rest = &content[YAML_FRONTMATTER_START.len()..];
+        let end_pos = rest
+            .find("\n---")
+            .ok_or(StateError::MissingFrontmatterEnd)?;
+
+        let yaml_content = &rest[..end_pos];
+
+        // First parse as generic YAML to check for required fields
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+            .map_err(|e| StateError::YamlParseError(e.to_string()))?;
+
+        let mapping = yaml_value
+            .as_mapping()
+            .ok_or_else(|| StateError::MissingRequiredField("YAML must be a mapping".to_string()))?;
+
+        // Validate required fields per loop-common.sh parse_state_file_strict
+        let required_fields = ["current_round", "max_iterations", "review_started", "base_branch"];
+        for field in &required_fields {
+            if !mapping.contains_key(&serde_yaml::Value::String(field.to_string())) {
+                return Err(StateError::MissingRequiredField(field.to_string()));
+            }
+        }
+
+        // Now parse into State struct
+        let state: State = serde_yaml::from_str(yaml_content)
+            .map_err(|e| StateError::YamlParseError(e.to_string()))?;
+
+        Ok(state)
+    }
+
     /// Serialize state to markdown with YAML frontmatter.
     pub fn to_markdown(&self) -> Result<String, StateError> {
         let yaml = serde_yaml::to_string(self)
@@ -383,6 +427,9 @@ pub enum StateError {
 
     #[error("YAML serialize error: {0}")]
     YamlSerializeError(String),
+
+    #[error("Missing required field: {0}")]
+    MissingRequiredField(String),
 }
 
 #[cfg(test)]
@@ -463,5 +510,45 @@ Some content below.
         assert_eq!(State::terminal_state_filename("cancel"), "cancel-state.md");
         assert_eq!(State::terminal_state_filename("maxiter"), "maxiter-state.md");
         assert_eq!(State::terminal_state_filename("unknown"), "unexpected-state.md");
+    }
+
+    #[test]
+    fn test_strict_parsing_rejects_missing_required_fields() {
+        // Missing base_branch
+        let content_missing_base = r#"---
+current_round: 0
+max_iterations: 42
+review_started: false
+---
+"#;
+        let result = State::from_markdown_strict(content_missing_base);
+        assert!(result.is_err());
+        match result {
+            Err(StateError::MissingRequiredField(field)) => {
+                assert_eq!(field, "base_branch");
+            }
+            _ => panic!("Expected MissingRequiredField error for base_branch"),
+        }
+
+        // Missing max_iterations
+        let content_missing_max = r#"---
+current_round: 0
+review_started: false
+base_branch: master
+---
+"#;
+        let result = State::from_markdown_strict(content_missing_max);
+        assert!(result.is_err());
+
+        // Valid state with all required fields
+        let content_valid = r#"---
+current_round: 0
+max_iterations: 42
+review_started: false
+base_branch: master
+---
+"#;
+        let result = State::from_markdown_strict(content_valid);
+        assert!(result.is_ok());
     }
 }
