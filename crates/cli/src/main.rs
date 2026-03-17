@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
+mod hook_input;
 
 #[derive(Parser)]
 #[command(name = "humanize")]
@@ -27,6 +28,7 @@ enum Commands {
     Cancel(CancelCommands),
 
     /// Hook subcommands (called by Claude Code hooks)
+    /// All hooks read JSON input from stdin
     #[command(subcommand)]
     Hook(HookCommands),
 
@@ -107,42 +109,22 @@ enum CancelCommands {
 
 #[derive(Subcommand)]
 enum HookCommands {
-    /// Read validator hook
-    ReadValidator {
-        /// File path being read (from stdin JSON)
-        #[arg(long)]
-        file_path: String,
-    },
+    /// Read validator hook - reads JSON from stdin
+    ReadValidator,
 
-    /// Write validator hook
-    WriteValidator {
-        /// File path being written (from stdin JSON)
-        #[arg(long)]
-        file_path: String,
-    },
+    /// Write validator hook - reads JSON from stdin
+    WriteValidator,
 
-    /// Edit validator hook
-    EditValidator {
-        /// File path being edited (from stdin JSON)
-        #[arg(long)]
-        file_path: String,
-    },
+    /// Edit validator hook - reads JSON from stdin
+    EditValidator,
 
-    /// Bash command validator hook
-    BashValidator {
-        /// Command being executed (from stdin JSON)
-        #[arg(long)]
-        command: String,
-    },
+    /// Bash command validator hook - reads JSON from stdin
+    BashValidator,
 
-    /// Plan file validator hook
-    PlanFileValidator {
-        /// Plan file path (from stdin JSON)
-        #[arg(long)]
-        plan_file: String,
-    },
+    /// Plan file validator hook - reads JSON from stdin
+    PlanFileValidator,
 
-    /// PostToolUse hook for session handshake
+    /// PostToolUse hook for session handshake - reads JSON from stdin
     PostToolUse,
 }
 
