@@ -2,120 +2,157 @@
 //!
 //! This module provides parsing and serialization for the state.md files
 //! used to track RLCR and PR loop progress.
+//!
+//! IMPORTANT: This schema must EXACTLY match the Bash implementation
+//! in humanize/scripts/setup-rlcr-loop.sh and humanize/hooks/lib/loop-common.sh
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::constants::{DEFAULT_MAX_ITERATIONS, YAML_FRONTMATTER_START, YAML_FRONTMATTER_END};
+use crate::constants::{YAML_FRONTMATTER_END, YAML_FRONTMATTER_START};
 
 /// Represents the state of an RLCR or PR loop.
+///
+/// Schema matches setup-rlcr-loop.sh exactly:
+/// All field names use snake_case as per YAML convention.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
 pub struct State {
     /// Current round number (0-indexed).
+    #[serde(default)]
     pub current_round: u32,
 
     /// Maximum number of iterations allowed.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
 
-    /// Path to the plan file (relative to project root).
-    pub plan_file: String,
-
-    /// Unique session identifier for this loop instance.
-    #[serde(default)]
-    pub session_id: String,
-
-    /// Base branch for the loop (e.g., "main", "master").
-    pub base_branch: String,
-
-    /// Start branch where the loop began.
-    pub start_branch: String,
-
-    /// Base commit SHA at loop start.
-    pub base_commit_sha: String,
-
-    /// Whether agent teams mode is enabled.
-    #[serde(default)]
-    pub agent_teams: bool,
-
-    /// Codex model to use.
+    /// Codex model name (e.g., "gpt-5.4").
     #[serde(default = "default_codex_model")]
     pub codex_model: String,
 
-    /// Codex effort level.
+    /// Codex reasoning effort (e.g., "high", "xhigh").
     #[serde(default = "default_codex_effort")]
     pub codex_effort: String,
 
     /// Codex timeout in seconds.
     #[serde(default = "default_codex_timeout")]
-    pub codex_timeout_secs: u64,
+    pub codex_timeout: u64,
 
-    /// Loop directory path (relative to .humanize/).
-    pub loop_dir: String,
+    /// Whether to push after each round.
+    #[serde(default)]
+    pub push_every_round: bool,
 
-    /// Timestamp when the loop was created.
-    pub created_at: String,
+    /// Interval for full alignment checks (round N-1 for N, 2N-1, etc.).
+    #[serde(default = "default_full_review_round")]
+    pub full_review_round: u32,
 
-    /// For PR loops: the PR URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Path to the plan file (relative to project root).
+    #[serde(default)]
+    pub plan_file: String,
+
+    /// Whether the plan file is tracked in git.
+    #[serde(default)]
+    pub plan_tracked: bool,
+
+    /// Branch where the loop started.
+    #[serde(default)]
+    pub start_branch: String,
+
+    /// Base branch for code review.
+    #[serde(default)]
+    pub base_branch: String,
+
+    /// Base commit SHA.
+    #[serde(default)]
+    pub base_commit: String,
+
+    /// Whether review phase has started.
+    #[serde(default)]
+    pub review_started: bool,
+
+    /// Whether to ask Codex for clarification.
+    #[serde(default = "default_ask_codex_question")]
+    pub ask_codex_question: bool,
+
+    /// Session identifier for this loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+
+    /// Whether agent teams mode is enabled.
+    #[serde(default)]
+    pub agent_teams: bool,
+
+    /// Timestamp when the loop was created (ISO 8601).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+
+    // PR loop specific fields
+
+    /// PR URL for PR loops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
 
-    /// For PR loops: list of bots being tracked.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_bots: Option<Vec<String>>,
+    /// List of bots that have approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_bots: Option<Vec<String>>,
 
-    /// For PR loops: list of bots pending approval.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// List of bots still pending approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_bots: Option<Vec<String>>,
 }
 
+// Default functions for serde
 fn default_max_iterations() -> u32 {
-    DEFAULT_MAX_ITERATIONS
+    42
 }
 
 fn default_codex_model() -> String {
-    crate::constants::DEFAULT_CODEX_MODEL.to_string()
+    "gpt-5.4".to_string()
 }
 
 fn default_codex_effort() -> String {
-    crate::constants::DEFAULT_CODEX_EFFORT.to_string()
+    "high".to_string()
 }
 
 fn default_codex_timeout() -> u64 {
-    crate::constants::DEFAULT_CODEX_TIMEOUT_SECS
+    5400
 }
 
-impl State {
-    /// Create a new state with default values.
-    pub fn new(
-        plan_file: String,
-        base_branch: String,
-        start_branch: String,
-        base_commit_sha: String,
-        loop_dir: String,
-    ) -> Self {
-        let now = current_timestamp();
+fn default_full_review_round() -> u32 {
+    5
+}
+
+fn default_ask_codex_question() -> bool {
+    true
+}
+
+impl Default for State {
+    fn default() -> Self {
         Self {
             current_round: 0,
-            max_iterations: DEFAULT_MAX_ITERATIONS,
-            plan_file,
-            session_id: String::new(),
-            base_branch,
-            start_branch,
-            base_commit_sha,
-            agent_teams: false,
+            max_iterations: default_max_iterations(),
             codex_model: default_codex_model(),
             codex_effort: default_codex_effort(),
-            codex_timeout_secs: default_codex_timeout(),
-            loop_dir,
-            created_at: now,
+            codex_timeout: default_codex_timeout(),
+            push_every_round: false,
+            full_review_round: default_full_review_round(),
+            plan_file: String::new(),
+            plan_tracked: false,
+            start_branch: String::new(),
+            base_branch: String::new(),
+            base_commit: String::new(),
+            review_started: false,
+            ask_codex_question: default_ask_codex_question(),
+            session_id: None,
+            agent_teams: false,
+            started_at: None,
             pr_url: None,
-            active_bots: None,
+            approved_bots: None,
             pending_bots: None,
         }
     }
+}
 
+impl State {
     /// Parse state from a file containing YAML frontmatter.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, StateError> {
         let content = std::fs::read_to_string(path.as_ref())
@@ -127,15 +164,15 @@ impl State {
     pub fn from_markdown(content: &str) -> Result<Self, StateError> {
         let content = content.trim();
 
-        // Check for YAML frontmatter
+        // Check for YAML frontmatter start
         if !content.starts_with(YAML_FRONTMATTER_START) {
             return Err(StateError::MissingFrontmatter);
         }
 
-        // Find the closing delimiter
+        // Find the closing delimiter (must be on its own line)
         let rest = &content[YAML_FRONTMATTER_START.len()..];
         let end_pos = rest
-            .find(YAML_FRONTMATTER_END)
+            .find("\n---")
             .ok_or(StateError::MissingFrontmatterEnd)?;
 
         let yaml_content = &rest[..end_pos];
@@ -143,6 +180,9 @@ impl State {
         // Parse YAML
         let state: State = serde_yaml::from_str(yaml_content)
             .map_err(|e| StateError::YamlParseError(e.to_string()))?;
+
+        // Ensure defaults are applied for missing fields
+        // (serde's default attribute handles this for Option types and defaults)
 
         Ok(state)
     }
@@ -152,10 +192,12 @@ impl State {
         let yaml = serde_yaml::to_string(self)
             .map_err(|e| StateError::YamlSerializeError(e.to_string()))?;
 
+        // Format: ---\n<yaml>\n---\n\n
+        // This matches the Bash implementation's format
         Ok(format!(
-            "{}\n{}{}\n\n",
+            "{}\n{}\n{}\n\n",
             YAML_FRONTMATTER_START,
-            yaml,
+            yaml.trim_end(),
             YAML_FRONTMATTER_END
         ))
     }
@@ -168,11 +210,46 @@ impl State {
         Ok(())
     }
 
-    /// Check if this is a terminal state (loop has ended).
-    pub fn is_terminal_state(&self) -> bool {
-        // This would be determined by checking if the state file has been renamed
-        // to a terminal state name. For now, return false.
-        false
+    /// Create a new RLCR state with the given parameters.
+    pub fn new_rlcr(
+        plan_file: String,
+        plan_tracked: bool,
+        start_branch: String,
+        base_branch: String,
+        base_commit: String,
+        max_iterations: Option<u32>,
+        codex_model: Option<String>,
+        codex_effort: Option<String>,
+        codex_timeout: Option<u64>,
+        push_every_round: bool,
+        full_review_round: Option<u32>,
+        ask_codex_question: bool,
+        agent_teams: bool,
+        review_started: bool,
+    ) -> Self {
+        let now = chrono_lite_now();
+        Self {
+            current_round: 0,
+            max_iterations: max_iterations.unwrap_or_else(default_max_iterations),
+            codex_model: codex_model.unwrap_or_else(default_codex_model),
+            codex_effort: codex_effort.unwrap_or_else(default_codex_effort),
+            codex_timeout: codex_timeout.unwrap_or_else(default_codex_timeout),
+            push_every_round,
+            full_review_round: full_review_round.unwrap_or_else(default_full_review_round),
+            plan_file,
+            plan_tracked,
+            start_branch,
+            base_branch,
+            base_commit,
+            review_started,
+            ask_codex_question,
+            session_id: None,  // Empty initially, filled by PostToolUse hook
+            agent_teams,
+            started_at: Some(now),
+            pr_url: None,
+            approved_bots: None,
+            pending_bots: None,
+        }
     }
 
     /// Increment the round counter.
@@ -184,16 +261,46 @@ impl State {
     pub fn is_max_iterations_reached(&self) -> bool {
         self.current_round >= self.max_iterations
     }
+
+    /// Check if this is a terminal state filename.
+    pub fn is_terminal_state_file(filename: &str) -> bool {
+        let terminal_states = [
+            "complete-state.md",
+            "cancel-state.md",
+            "maxiter-state.md",
+            "stop-state.md",
+            "unexpected-state.md",
+            "approve-state.md",
+            "merged-state.md",
+            "closed-state.md",
+        ];
+        terminal_states.contains(&filename)
+    }
+
+    /// Get the terminal state filename for a given exit reason.
+    pub fn terminal_state_filename(reason: &str) -> &'static str {
+        match reason {
+            "complete" => "complete-state.md",
+            "cancel" => "cancel-state.md",
+            "maxiter" => "maxiter-state.md",
+            "stop" => "stop-state.md",
+            "unexpected" => "unexpected-state.md",
+            "approve" => "approve-state.md",
+            "merged" => "merged-state.md",
+            "closed" => "closed-state.md",
+            _ => "unexpected-state.md",
+        }
+    }
 }
 
-/// Generate a timestamp string in YYYY-MM-DD_HH-MM-SS format.
-fn current_timestamp() -> String {
+/// Generate a timestamp in ISO 8601 format.
+fn chrono_lite_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let secs = duration.as_secs();
-    // Format: YYYY-MM-DD_HH-MM-SS (approximate)
+    // Format: YYYY-MM-DDTHH:MM:SSZ
     let days = secs / 86400;
     let years = 1970 + days / 365;
     let remaining_days = days % 365;
@@ -203,8 +310,8 @@ fn current_timestamp() -> String {
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
     format!(
-        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
-        years, months, day, hours, minutes, seconds
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        years, months.min(12), day.min(28), hours.min(23), minutes.min(59), seconds.min(59)
     )
 }
 
@@ -233,18 +340,10 @@ mod tests {
 
     #[test]
     fn test_state_to_markdown() {
-        let state = State::new(
-            "docs/plan.md".to_string(),
-            "master".to_string(),
-            "master".to_string(),
-            "abc123".to_string(),
-            ".humanize/rlcr/test".to_string(),
-        );
-
+        let state = State::default();
         let md = state.to_markdown().unwrap();
         assert!(md.starts_with("---\n"));
         assert!(md.contains("current_round: 0"));
-        assert!(md.contains("plan_file: docs/plan.md"));
     }
 
     #[test]
@@ -252,13 +351,20 @@ mod tests {
         let content = r#"---
 current_round: 1
 max_iterations: 42
+codex_model: gpt-5.4
+codex_effort: high
+codex_timeout: 5400
+push_every_round: false
+full_review_round: 5
 plan_file: docs/plan.md
-session_id: test-session
-base_branch: master
+plan_tracked: false
 start_branch: master
-base_commit_sha: abc123
-loop_dir: .humanize/rlcr/test
-created_at: "2026-03-17_14-00-00"
+base_branch: master
+base_commit: abc123
+review_started: false
+ask_codex_question: true
+session_id:
+agent_teams: false
 ---
 
 Some content below.
@@ -267,17 +373,26 @@ Some content below.
         let state = State::from_markdown(content).unwrap();
         assert_eq!(state.current_round, 1);
         assert_eq!(state.plan_file, "docs/plan.md");
-        assert_eq!(state.session_id, "test-session");
+        assert!(state.session_id.is_none());
     }
 
     #[test]
     fn test_state_roundtrip() {
-        let original = State::new(
+        let original = State::new_rlcr(
             "docs/plan.md".to_string(),
-            "main".to_string(),
-            "feature".to_string(),
-            "def456".to_string(),
-            ".humanize/rlcr/roundtrip-test".to_string(),
+            false,
+            "master".to_string(),
+            "master".to_string(),
+            "abc123".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            true,
+            false,
+            false,
         );
 
         let md = original.to_markdown().unwrap();
@@ -286,5 +401,13 @@ Some content below.
         assert_eq!(original.current_round, parsed.current_round);
         assert_eq!(original.plan_file, parsed.plan_file);
         assert_eq!(original.base_branch, parsed.base_branch);
+    }
+
+    #[test]
+    fn test_terminal_state_filename() {
+        assert_eq!(State::terminal_state_filename("complete"), "complete-state.md");
+        assert_eq!(State::terminal_state_filename("cancel"), "cancel-state.md");
+        assert_eq!(State::terminal_state_filename("maxiter"), "maxiter-state.md");
+        assert_eq!(State::terminal_state_filename("unknown"), "unexpected-state.md");
     }
 }
