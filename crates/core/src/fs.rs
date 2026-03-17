@@ -144,25 +144,20 @@ pub fn validate_json_depth(json: &str) -> Result<(), FsError> {
 }
 
 /// Check if a path is a round-specific file that should be blocked from reading.
+///
+/// Matches pattern: round-N-*.md where N is a number.
 pub fn is_round_specific_file(path: &str) -> bool {
     let path_lower = path.to_lowercase();
+    let filename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
 
-    // Match round-N-summary.md, round-N-review-*.md, etc.
-    if path_lower.contains("/round-") || path_lower.starts_with("round-") {
-        // Check if it matches round-N-*.md pattern
-        let parts: Vec<&str> = path_lower.split('/').collect();
-        if let Some(filename) = parts.last() {
-            if filename.starts_with("round-") && filename.ends_with(".md") {
-                // Check if it has a number after "round-"
-                let rest = &filename[6..]; // skip "round-"
-                if rest.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-                    return true;
-                }
-            }
-        }
+    // Must start with "round-" and end with ".md"
+    if !filename.starts_with("round-") || !filename.ends_with(".md") {
+        return false;
     }
 
-    false
+    // Check if it has a number after "round-"
+    let rest = &filename[6..]; // skip "round-"
+    rest.chars().next().map_or(false, |c| c.is_ascii_digit())
 }
 
 /// Check if a path is a protected state file that should be blocked from writing.
