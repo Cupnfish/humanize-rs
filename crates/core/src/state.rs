@@ -85,6 +85,20 @@ pub struct State {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
 
+    // BitLesson fields
+
+    /// Whether BitLesson validation is required.
+    #[serde(default)]
+    pub bitlesson_required: bool,
+
+    /// Path to the BitLesson file (relative to project root).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitlesson_file: Option<String>,
+
+    /// Whether to allow empty "none" entries in BitLesson.
+    #[serde(default)]
+    pub bitlesson_allow_empty_none: bool,
+
     // PR loop specific fields
 
     /// PR URL for PR loops.
@@ -145,6 +159,9 @@ impl Default for State {
             session_id: None,
             agent_teams: false,
             started_at: None,
+            bitlesson_required: false,
+            bitlesson_file: None,
+            bitlesson_allow_empty_none: false,
             pr_url: None,
             approved_bots: None,
             pending_bots: None,
@@ -226,6 +243,9 @@ impl State {
         ask_codex_question: bool,
         agent_teams: bool,
         review_started: bool,
+        bitlesson_required: bool,
+        bitlesson_file: Option<String>,
+        bitlesson_allow_empty_none: bool,
     ) -> Self {
         let now = chrono_lite_now();
         Self {
@@ -246,6 +266,9 @@ impl State {
             session_id: None,  // Empty initially, filled by PostToolUse hook
             agent_teams,
             started_at: Some(now),
+            bitlesson_required,
+            bitlesson_file,
+            bitlesson_allow_empty_none,
             pr_url: None,
             approved_bots: None,
             pending_bots: None,
@@ -293,26 +316,10 @@ impl State {
     }
 }
 
-/// Generate a timestamp in ISO 8601 format.
+/// Generate a timestamp in ISO 8601 format (UTC).
 fn chrono_lite_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-    // Format: YYYY-MM-DDTHH:MM:SSZ
-    let days = secs / 86400;
-    let years = 1970 + days / 365;
-    let remaining_days = days % 365;
-    let months = remaining_days / 30 + 1;
-    let day = remaining_days % 30 + 1;
-    let hours = (secs % 86400) / 3600;
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        years, months.min(12), day.min(28), hours.min(23), minutes.min(59), seconds.min(59)
-    )
+    use chrono::Utc;
+    Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// Errors that can occur when working with state.
@@ -393,6 +400,9 @@ Some content below.
             true,
             false,
             false,
+            false,  // bitlesson_required
+            None,   // bitlesson_file
+            false,  // bitlesson_allow_empty_none
         );
 
         let md = original.to_markdown().unwrap();
