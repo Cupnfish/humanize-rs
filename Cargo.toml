@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/core",
     "crates/cli",
@@ -9,7 +9,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["Humanize Contributors"]
+authors = ["Cupnfish <cupnfish@icloud.com>"]
 license = "MIT"
 repository = "https://github.com/Cupnfish/humanize-rs"
 
