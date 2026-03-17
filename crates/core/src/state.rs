@@ -463,8 +463,11 @@ impl State {
 
 /// Find the active RLCR loop directory.
 ///
-/// Searches for an active loop (one with state.md, not a terminal state file).
-/// Matches loop-common.sh find_active_loop behavior.
+/// Matches loop-common.sh find_active_loop behavior exactly:
+/// - Without session filter: only check the single newest directory (zombie-loop protection)
+/// - With session filter: iterate newest-to-oldest, find first matching session
+/// - Empty stored session_id matches any filter (backward compatibility)
+/// - Only return if still active (has active state file, not terminal)
 pub fn find_active_loop(
     base_dir: &Path,
     session_id: Option<&str>,
@@ -473,27 +476,75 @@ pub fn find_active_loop(
         return None;
     }
 
-    let entries = std::fs::read_dir(base_dir).ok()?;
+    // Collect all subdirectories with their modification times
+    let mut dirs_with_mtime: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+
+    let entries = match std::fs::read_dir(base_dir) {
+        Ok(e) => e,
+        Err(_) => return None,
+    };
+
     for entry in entries.flatten() {
-        let loop_dir = entry.path();
-        if !loop_dir.is_dir() {
+        let path = entry.path();
+        if path.is_dir() {
+            let mtime = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            dirs_with_mtime.push((path, mtime));
+        }
+    }
+
+    // Sort by modification time, newest first
+    dirs_with_mtime.sort_by(|a, b| b.1.cmp(&a.1));
+
+    if session_id.is_none() {
+        // No filter: only check the single newest directory (zombie-loop protection)
+        if let Some((newest_dir, _)) = dirs_with_mtime.first() {
+            // Only return if it has an active state file
+            if resolve_active_state_file(newest_dir).is_some() {
+                return Some(newest_dir.clone());
+            }
+        }
+        return None;
+    }
+
+    // Session filter: iterate newest-to-oldest
+    let filter_sid = session_id.unwrap();
+
+    for (loop_dir, _) in dirs_with_mtime {
+        // Check if this directory has any state file (active or terminal)
+        let any_state = resolve_any_state_file(&loop_dir);
+        if any_state.is_none() {
             continue;
         }
 
-        // Check for active state file (state.md, not terminal)
-        let state_file = loop_dir.join("state.md");
-        if state_file.exists() {
-            // If session_id provided, verify it matches
-            if let Some(sid) = session_id {
-                if let Ok(content) = std::fs::read_to_string(&state_file) {
-                    if let Ok(state) = State::from_markdown(&content) {
-                        if state.session_id.as_deref() == Some(sid) {
-                            return Some(loop_dir);
-                        }
+        // Read session_id from the state file
+        let stored_session_id = any_state
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| {
+                // Extract session_id from YAML frontmatter
+                for line in content.lines() {
+                    if line.starts_with("session_id:") {
+                        let value = line.strip_prefix("session_id:").unwrap_or("").trim();
+                        return Some(value.to_string());
+                    }
+                    if line == "---" && !content.starts_with("---") {
+                        break; // End of frontmatter
                     }
                 }
-            } else {
-                // No session filter, return first active loop
+                None
+            });
+
+        // Empty stored session_id matches any session (backward compatibility)
+        let matches_session = match stored_session_id {
+            None => true, // No stored session_id, matches any
+            Some(ref stored) if stored.is_empty() => true, // Empty matches any
+            Some(ref stored) => stored == filter_sid,
+        };
+
+        if matches_session {
+            // This is the newest dir for this session -- only return if active
+            if resolve_active_state_file(&loop_dir).is_some() {
                 return Some(loop_dir);
             }
         }
