@@ -210,7 +210,6 @@ fn validate_read(input: &HookInput) -> HookOutput {
 
     // Validate file location - must be in .humanize/rlcr/ or .humanize/pr-loop/
     if !humanize_core::fs::is_in_humanize_loop_dir(&path_lower) {
-        let file_type = if is_summary { "summary" } else { "prompt" };
         return HookOutput::block(format!(
             "Reading {} is blocked. Read from the active loop: {}",
             file_path,
@@ -400,6 +399,17 @@ fn is_finalize_state_file(path_lower: &str) -> bool {
     path_lower.ends_with("/finalize-state.md")
 }
 
+/// Protected file patterns that should not be modified via shell commands.
+const PROTECTED_PATTERNS: &[&str] = &[
+    "state.md", "finalize-state.md", "goal-tracker.md",
+    "round-", "-summary.md", "-prompt.md", "-todos.md",
+];
+
+/// Check if a command contains any protected file pattern.
+fn contains_protected_pattern(cmd_lower: &str) -> Option<&'static str> {
+    PROTECTED_PATTERNS.iter().find(|p| cmd_lower.contains(*p)).copied()
+}
+
 /// Validate Edit tool access.
 ///
 /// Implements parity with loop-edit-validator.sh:
@@ -551,54 +561,40 @@ fn validate_bash(input: &HookInput) -> HookOutput {
     }
 
     // Block git add targeting .humanize
-    if cmd_lower.starts_with("git add") || cmd_lower.starts_with("git add") {
-        if cmd_lower.contains(".humanize") {
-            return HookOutput::block(format!(
-                "Adding .humanize files to git is not allowed: {}",
-                cmd_trimmed
-            ));
-        }
+    if cmd_lower.starts_with("git add") && cmd_lower.contains(".humanize") {
+        return HookOutput::block(format!(
+            "Adding .humanize files to git is not allowed: {}",
+            cmd_trimmed
+        ));
     }
 
     // Block file redirections to protected files
-    let protected_patterns = [
-        "state.md", "finalize-state.md", "goal-tracker.md",
-        "round-", "-summary.md", "-prompt.md", "-todos.md",
-    ];
-
-    // Check for > and >> redirections
     if cmd_lower.contains("> ") || cmd_lower.contains(">>") {
-        for protected in &protected_patterns {
-            if cmd_lower.contains(protected) {
-                return HookOutput::block(format!(
-                    "Cannot redirect output to protected file '{}': {}",
-                    protected, cmd_trimmed
-                ));
-            }
+        if let Some(protected) = contains_protected_pattern(&cmd_lower) {
+            return HookOutput::block(format!(
+                "Cannot redirect output to protected file '{}': {}",
+                protected, cmd_trimmed
+            ));
         }
     }
 
     // Block sed -i (in-place edit) for protected files
     if cmd_lower.contains("sed") && cmd_lower.contains("-i") {
-        for protected in &protected_patterns {
-            if cmd_lower.contains(protected) {
-                return HookOutput::block(format!(
-                    "Cannot edit protected file '{}' in-place: {}",
-                    protected, cmd_trimmed
-                ));
-            }
+        if let Some(protected) = contains_protected_pattern(&cmd_lower) {
+            return HookOutput::block(format!(
+                "Cannot edit protected file '{}' in-place: {}",
+                protected, cmd_trimmed
+            ));
         }
     }
 
     // Block tee for protected files
     if cmd_lower.contains("tee ") {
-        for protected in &protected_patterns {
-            if cmd_lower.contains(protected) {
-                return HookOutput::block(format!(
-                    "Cannot tee to protected file '{}': {}",
-                    protected, cmd_trimmed
-                ));
-            }
+        if let Some(protected) = contains_protected_pattern(&cmd_lower) {
+            return HookOutput::block(format!(
+                "Cannot tee to protected file '{}': {}",
+                protected, cmd_trimmed
+            ));
         }
     }
 
@@ -628,6 +624,11 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
     // TODO: Implement full git state validation
 
     HookOutput::allow()
+}
+
+/// Check if a line represents an empty session_id field.
+fn is_empty_session_id_line(line: &str) -> bool {
+    matches!(line, "session_id:" | "session_id: " | "session_id: ~" | "session_id: null")
 }
 
 /// Handle PostToolUse hook for session handshake.
@@ -716,16 +717,14 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
     };
 
     // Check if session_id is currently empty (safety check)
-    let has_empty_session_id = state_content
-        .lines()
-        .any(|line| line == "session_id:" || line == "session_id: " || line == "session_id: ~" || line == "session_id: null");
+    let has_empty_session_id = state_content.lines().any(is_empty_session_id_line);
 
     if has_empty_session_id {
         // Patch state.md by replacing empty session_id with actual value
         let patched = state_content
             .lines()
             .map(|line| {
-                if line == "session_id:" || line == "session_id: " || line == "session_id: ~" || line == "session_id: null" {
+                if is_empty_session_id_line(line) {
                     format!("session_id: {}", session_id)
                 } else {
                     line.to_string()
