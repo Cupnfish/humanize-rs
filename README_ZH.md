@@ -81,7 +81,7 @@ humanize --help
 ### 2. 安装运行时 assets
 
 ```bash
-cargo run -- install --plugin-root "$PWD"
+humanize install --plugin-root "$PWD"
 ```
 
 这个步骤会同步：
@@ -101,14 +101,16 @@ binary 必须已经在 `PATH` 上。
 Codex:
 
 ```bash
-cargo run -- install-skills --target codex
+humanize install-skills --target codex
 ```
 
 Kimi:
 
 ```bash
-cargo run -- install-skills --target kimi
+humanize install-skills --target kimi
 ```
+
+如果当前机器上还没有把 `humanize` 装到 `PATH`，本地开发时也可以临时用 `cargo run -- ...` 代替。
 
 安装后的 skill 默认假定 `humanize` 已经在 `PATH` 上。
 
@@ -124,32 +126,32 @@ export CLAUDE_PROJECT_DIR="$PWD"
 ### 生成计划
 
 ```bash
-cargo run -- gen-plan --input draft.md --output docs/plan.md
+humanize gen-plan --input draft.md --output docs/plan.md
 ```
 
 ### 启动 RLCR
 
 ```bash
-cargo run -- setup rlcr docs/plan.md
+humanize setup rlcr docs/plan.md
 ```
 
 ### RLCR Gate
 
 ```bash
-cargo run -- gate rlcr
+humanize gate rlcr
 ```
 
 ### 启动 PR Loop
 
 ```bash
-cargo run -- setup pr --claude
-cargo run -- setup pr --codex
+humanize setup pr --claude
+humanize setup pr --codex
 ```
 
 ### Ask Codex
 
 ```bash
-cargo run -- ask-codex "Explain the latest review result"
+humanize ask-codex "Explain the latest review result"
 ```
 
 ### Monitor
@@ -157,13 +159,13 @@ cargo run -- ask-codex "Explain the latest review result"
 快照模式：
 
 ```bash
-cargo run -- monitor rlcr --once
+humanize monitor rlcr --once
 ```
 
 TUI 模式：
 
 ```bash
-cargo run -- monitor rlcr
+humanize monitor rlcr
 ```
 
 示例监控界面：

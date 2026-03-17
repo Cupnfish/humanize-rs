@@ -120,7 +120,7 @@ humanize --help
 Install the runtime assets into a plugin root:
 
 ```bash
-cargo run -- install --plugin-root "$PWD"
+humanize install --plugin-root "$PWD"
 ```
 
 This syncs:
@@ -139,26 +139,26 @@ It does **not** copy the executable. The executable must already be available on
 For Codex:
 
 ```bash
-cargo run -- install-skills --target codex
+humanize install-skills --target codex
 ```
 
 For Kimi:
 
 ```bash
-cargo run -- install-skills --target kimi
+humanize install-skills --target kimi
 ```
 
 Useful variants:
 
 ```bash
 # both targets
-cargo run -- install-skills --target both
+humanize install-skills --target both
 
 # custom target directory
-cargo run -- install-skills --target codex --skills-dir /tmp/my-skills
+humanize install-skills --target codex --skills-dir /tmp/my-skills
 
 # preview only
-cargo run -- install-skills --target codex --dry-run
+humanize install-skills --target codex --dry-run
 ```
 
 Default skill install locations:
@@ -180,18 +180,20 @@ export CLAUDE_PROJECT_DIR="$PWD"
 Inspect the CLI:
 
 ```bash
-cargo run -- --help
-cargo run -- setup rlcr --help
-cargo run -- setup pr --help
-cargo run -- monitor rlcr --help
+humanize --help
+humanize setup rlcr --help
+humanize setup pr --help
+humanize monitor rlcr --help
 ```
+
+If `humanize` is not installed on `PATH` yet, you can temporarily replace these examples with `cargo run -- ...` while developing locally.
 
 ## Common Workflows
 
 ### Generate a Plan
 
 ```bash
-cargo run -- gen-plan --input draft.md --output docs/plan.md
+humanize gen-plan --input draft.md --output docs/plan.md
 ```
 
 The native `gen-plan` flow:
@@ -206,15 +208,15 @@ The native `gen-plan` flow:
 ### Start RLCR
 
 ```bash
-cargo run -- setup rlcr docs/plan.md
+humanize setup rlcr docs/plan.md
 ```
 
 Useful variants:
 
 ```bash
-cargo run -- setup rlcr --skip-impl
-cargo run -- setup rlcr docs/plan.md --max-iterations 20 --full-review-round 3
-cargo run -- setup rlcr docs/plan.md --push-every-round
+humanize setup rlcr --skip-impl
+humanize setup rlcr docs/plan.md --max-iterations 20 --full-review-round 3
+humanize setup rlcr docs/plan.md --push-every-round
 ```
 
 ### RLCR Stop / Gate
@@ -222,13 +224,13 @@ cargo run -- setup rlcr docs/plan.md --push-every-round
 Direct stop invocation:
 
 ```bash
-printf '{}' | cargo run -- stop rlcr
+printf '{}' | humanize stop rlcr
 ```
 
 Skill-mode or non-hook gate:
 
 ```bash
-cargo run -- gate rlcr
+humanize gate rlcr
 ```
 
 Gate exit codes:
@@ -240,28 +242,28 @@ Gate exit codes:
 ### Start PR Loop
 
 ```bash
-cargo run -- setup pr --claude
-cargo run -- setup pr --codex
-cargo run -- setup pr --claude --codex
+humanize setup pr --claude
+humanize setup pr --codex
+humanize setup pr --claude --codex
 ```
 
 ### Stop PR Loop
 
 ```bash
-printf '{}' | cargo run -- stop pr
+printf '{}' | humanize stop pr
 ```
 
 ### Cancel Loops
 
 ```bash
-cargo run -- cancel rlcr
-cargo run -- cancel pr
+humanize cancel rlcr
+humanize cancel pr
 ```
 
 ### Ask Codex
 
 ```bash
-cargo run -- ask-codex "Explain the latest review result"
+humanize ask-codex "Explain the latest review result"
 ```
 
 ### Monitor
@@ -269,17 +271,17 @@ cargo run -- ask-codex "Explain the latest review result"
 One-shot snapshot:
 
 ```bash
-cargo run -- monitor rlcr --once
-cargo run -- monitor pr --once
-cargo run -- monitor skill --once
+humanize monitor rlcr --once
+humanize monitor pr --once
+humanize monitor skill --once
 ```
 
 Interactive TUI:
 
 ```bash
-cargo run -- monitor rlcr
-cargo run -- monitor pr
-cargo run -- monitor skill
+humanize monitor rlcr
+humanize monitor pr
+humanize monitor skill
 ```
 
 TUI controls:
@@ -301,14 +303,14 @@ Example: read validator
 
 ```bash
 printf '%s\n' '{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}' \
-  | cargo run -- hook read-validator
+  | humanize hook read-validator
 ```
 
 Example: bash validator
 
 ```bash
 printf '%s\n' '{"tool_name":"Bash","tool_input":{"command":"git add -A"}}' \
-  | cargo run -- hook bash-validator
+  | humanize hook bash-validator
 ```
 
 ## Prompt / Skill Maintenance
@@ -324,9 +326,9 @@ Examples:
 Update skill definitions in `skills/`, then reinstall:
 
 ```bash
-cargo run -- install-skills --target codex
+humanize install-skills --target codex
 # or
-cargo run -- install-skills --target kimi
+humanize install-skills --target kimi
 ```
 
 ## Additional Documentation
