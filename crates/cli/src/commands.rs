@@ -522,6 +522,12 @@ fn validate_edit(input: &HookInput) -> HookOutput {
 }
 
 /// Validate Bash command execution.
+///
+/// Implements parity with loop-bash-validator.sh:
+/// 1. Block git add targeting .humanize
+/// 2. Block file redirections to protected files
+/// 3. Block sed -i for protected files
+/// 4. Block dangerous shell patterns
 fn validate_bash(input: &HookInput) -> HookOutput {
     let command = match get_command(input) {
         Some(c) => c,
@@ -544,9 +550,61 @@ fn validate_bash(input: &HookInput) -> HookOutput {
         }
     }
 
+    // Block git add targeting .humanize
+    if cmd_lower.starts_with("git add") || cmd_lower.starts_with("git add") {
+        if cmd_lower.contains(".humanize") {
+            return HookOutput::block(format!(
+                "Adding .humanize files to git is not allowed: {}",
+                cmd_trimmed
+            ));
+        }
+    }
+
+    // Block file redirections to protected files
+    let protected_patterns = [
+        "state.md", "finalize-state.md", "goal-tracker.md",
+        "round-", "-summary.md", "-prompt.md", "-todos.md",
+    ];
+
+    // Check for > and >> redirections
+    if cmd_lower.contains("> ") || cmd_lower.contains(">>") {
+        for protected in &protected_patterns {
+            if cmd_lower.contains(protected) {
+                return HookOutput::block(format!(
+                    "Cannot redirect output to protected file '{}': {}",
+                    protected, cmd_trimmed
+                ));
+            }
+        }
+    }
+
+    // Block sed -i (in-place edit) for protected files
+    if cmd_lower.contains("sed") && cmd_lower.contains("-i") {
+        for protected in &protected_patterns {
+            if cmd_lower.contains(protected) {
+                return HookOutput::block(format!(
+                    "Cannot edit protected file '{}' in-place: {}",
+                    protected, cmd_trimmed
+                ));
+            }
+        }
+    }
+
+    // Block tee for protected files
+    if cmd_lower.contains("tee ") {
+        for protected in &protected_patterns {
+            if cmd_lower.contains(protected) {
+                return HookOutput::block(format!(
+                    "Cannot tee to protected file '{}': {}",
+                    protected, cmd_trimmed
+                ));
+            }
+        }
+    }
+
     // Dangerous patterns
     let dangerous_patterns = [
-        "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "> ", ">>", "2>",
+        "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "2>",
         "| ", " && ", "; ", "`", "$(", "chmod", "chown", "mkdir -p",
     ];
 
