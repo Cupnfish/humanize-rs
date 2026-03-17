@@ -101,17 +101,45 @@ pub struct State {
 
     // PR loop specific fields
 
-    /// PR URL for PR loops.
+    /// PR number for PR loops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_url: Option<String>,
+    pub pr_number: Option<u32>,
 
-    /// List of bots that have approved.
+    /// List of configured bots for PR review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_bots: Option<Vec<String>>,
+    pub configured_bots: Option<Vec<String>>,
 
-    /// List of bots still pending approval.
+    /// List of active bots for PR review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_bots: Option<Vec<String>>,
+    pub active_bots: Option<Vec<String>>,
+
+    /// Polling interval for PR state checks (seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval: Option<u64>,
+
+    /// Timeout for PR polling (seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_timeout: Option<u64>,
+
+    /// Startup case for PR loop (e.g., "new_pr", "existing_pr").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_case: Option<String>,
+
+    /// Latest commit SHA for PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_commit_sha: Option<String>,
+
+    /// Timestamp of latest commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_commit_at: Option<String>,
+
+    /// Timestamp of last trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_trigger_at: Option<String>,
+
+    /// ID of trigger comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_comment_id: Option<String>,
 }
 
 // Default functions for serde
@@ -162,9 +190,17 @@ impl Default for State {
             bitlesson_required: false,
             bitlesson_file: None,
             bitlesson_allow_empty_none: false,
-            pr_url: None,
-            approved_bots: None,
-            pending_bots: None,
+            // PR loop fields
+            pr_number: None,
+            configured_bots: None,
+            active_bots: None,
+            poll_interval: None,
+            poll_timeout: None,
+            startup_case: None,
+            latest_commit_sha: None,
+            latest_commit_at: None,
+            last_trigger_at: None,
+            trigger_comment_id: None,
         }
     }
 }
@@ -269,9 +305,17 @@ impl State {
             bitlesson_required,
             bitlesson_file,
             bitlesson_allow_empty_none,
-            pr_url: None,
-            approved_bots: None,
-            pending_bots: None,
+            // PR loop fields (all None for RLCR)
+            pr_number: None,
+            configured_bots: None,
+            active_bots: None,
+            poll_interval: None,
+            poll_timeout: None,
+            startup_case: None,
+            latest_commit_sha: None,
+            latest_commit_at: None,
+            last_trigger_at: None,
+            trigger_comment_id: None,
         }
     }
 
