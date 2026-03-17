@@ -18,6 +18,12 @@ Humanize 提供三类核心能力：
 - `PR loop`：PR review bot 跟踪与验证
 - `ask-codex`：一次性 Codex 咨询
 
+## 工作流示意
+
+RLCR 工作流：
+
+![RLCR Workflow](docs/images/rlcr-workflow.svg)
+
 运行时状态保存在项目目录下的 `.humanize/`：
 
 - `.humanize/rlcr/`

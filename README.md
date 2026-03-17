@@ -20,6 +20,12 @@ Humanize provides three main workflow families:
 - `PR loop`: review-bot tracking and validation for pull requests
 - `ask-codex`: one-shot Codex consultation
 
+## Workflow
+
+RLCR workflow overview:
+
+![RLCR Workflow](docs/images/rlcr-workflow.svg)
+
 State is stored under `.humanize/` in the working project:
 
 - `.humanize/rlcr/`
