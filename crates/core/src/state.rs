@@ -6,10 +6,22 @@
 //! IMPORTANT: This schema must EXACTLY match the Bash implementation
 //! in humanize/scripts/setup-rlcr-loop.sh and humanize/hooks/lib/loop-common.sh
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 
 use crate::constants::{YAML_FRONTMATTER_END, YAML_FRONTMATTER_START};
+
+/// Serialize Option<String> as empty string when None (not null).
+/// This matches the shell behavior: `session_id:` (empty, not `session_id: null`).
+fn serialize_optional_empty<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(s) => serializer.serialize_str(s),
+        None => serializer.serialize_str(""),
+    }
+}
 
 /// Represents the state of an RLCR or PR loop.
 ///
@@ -74,7 +86,8 @@ pub struct State {
     pub ask_codex_question: bool,
 
     /// Session identifier for this loop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always serialized as empty string when None (shell contract).
+    #[serde(default, serialize_with = "serialize_optional_empty")]
     pub session_id: Option<String>,
 
     /// Whether agent teams mode is enabled.
@@ -388,18 +401,36 @@ impl State {
         terminal_states.contains(&filename)
     }
 
+    /// Check if a reason is a valid terminal state reason.
+    pub fn is_valid_terminal_reason(reason: &str) -> bool {
+        matches!(
+            reason,
+            "complete"
+                | "cancel"
+                | "maxiter"
+                | "stop"
+                | "unexpected"
+                | "approve"
+                | "merged"
+                | "closed"
+        )
+    }
+
     /// Get the terminal state filename for a given exit reason.
-    pub fn terminal_state_filename(reason: &str) -> &'static str {
+    ///
+    /// Returns None if the reason is not a valid terminal reason.
+    /// Shell contract: invalid reasons should error, not silently map to unexpected.
+    pub fn terminal_state_filename(reason: &str) -> Option<&'static str> {
         match reason {
-            "complete" => "complete-state.md",
-            "cancel" => "cancel-state.md",
-            "maxiter" => "maxiter-state.md",
-            "stop" => "stop-state.md",
-            "unexpected" => "unexpected-state.md",
-            "approve" => "approve-state.md",
-            "merged" => "merged-state.md",
-            "closed" => "closed-state.md",
-            _ => "unexpected-state.md",
+            "complete" => Some("complete-state.md"),
+            "cancel" => Some("cancel-state.md"),
+            "maxiter" => Some("maxiter-state.md"),
+            "stop" => Some("stop-state.md"),
+            "unexpected" => Some("unexpected-state.md"),
+            "approve" => Some("approve-state.md"),
+            "merged" => Some("merged-state.md"),
+            "closed" => Some("closed-state.md"),
+            _ => None,
         }
     }
 
@@ -407,15 +438,20 @@ impl State {
     ///
     /// This implements the end-loop rename behavior from loop-common.sh:
     /// After determining the exit reason, rename state.md to <reason>-state.md
+    ///
+    /// Returns error if reason is not valid (matching shell end_loop behavior).
     pub fn rename_to_terminal<P: AsRef<Path>>(
         state_path: P,
         reason: &str,
     ) -> Result<PathBuf, StateError> {
+        let terminal_name = Self::terminal_state_filename(reason)
+            .ok_or_else(|| StateError::InvalidTerminalReason(reason.to_string()))?;
+
         let state_path = state_path.as_ref();
         let dir = state_path
             .parent()
             .ok_or_else(|| StateError::IoError("Cannot determine parent directory".to_string()))?;
-        let terminal_name = Self::terminal_state_filename(reason);
+
         let terminal_path = dir.join(terminal_name);
 
         std::fs::rename(state_path, &terminal_path)
@@ -468,15 +504,37 @@ pub fn find_active_loop(
 
 /// Resolve the active state file in a loop directory.
 ///
-/// Returns state.md if it exists, otherwise checks for terminal states.
-/// Matches loop-common.sh resolve_active_state_file behavior.
+/// Checks finalize-state.md FIRST (loop in finalize phase), then state.md.
+/// Does NOT return terminal states - only active states.
+/// Matches loop-common.sh resolve_active_state_file behavior exactly.
 pub fn resolve_active_state_file(loop_dir: &Path) -> Option<PathBuf> {
+    // First check for finalize-state.md (active but in finalize phase)
+    let finalize_file = loop_dir.join("finalize-state.md");
+    if finalize_file.exists() {
+        return Some(finalize_file);
+    }
+
+    // Then check for state.md (normal active state)
     let state_file = loop_dir.join("state.md");
     if state_file.exists() {
         return Some(state_file);
     }
 
-    // Check for terminal states
+    None
+}
+
+/// Resolve any state file (active or terminal) in a loop directory.
+///
+/// Prefers active states (finalize-state.md, state.md), then falls back
+/// to any terminal state file (*-state.md).
+/// Matches loop-common.sh resolve_any_state_file behavior exactly.
+pub fn resolve_any_state_file(loop_dir: &Path) -> Option<PathBuf> {
+    // Prefer active states
+    if let Some(active) = resolve_active_state_file(loop_dir) {
+        return Some(active);
+    }
+
+    // Fall back to terminal states (check in order of preference)
     let terminal_states = [
         "complete-state.md",
         "cancel-state.md",
@@ -496,14 +554,6 @@ pub fn resolve_active_state_file(loop_dir: &Path) -> Option<PathBuf> {
     }
 
     None
-}
-
-/// Resolve any state file (active or terminal) in a loop directory.
-///
-/// Returns the first state file found, preferring active state.md.
-/// Matches loop-common.sh resolve_any_state_file behavior.
-pub fn resolve_any_state_file(loop_dir: &Path) -> Option<PathBuf> {
-    resolve_active_state_file(loop_dir)
 }
 
 /// Check if a loop is in finalize phase.
@@ -546,6 +596,9 @@ pub enum StateError {
 
     #[error("Missing required field: {0}")]
     MissingRequiredField(String),
+
+    #[error("Invalid terminal reason: {0}")]
+    InvalidTerminalReason(String),
 }
 
 #[cfg(test)]
@@ -622,10 +675,10 @@ Some content below.
 
     #[test]
     fn test_terminal_state_filename() {
-        assert_eq!(State::terminal_state_filename("complete"), "complete-state.md");
-        assert_eq!(State::terminal_state_filename("cancel"), "cancel-state.md");
-        assert_eq!(State::terminal_state_filename("maxiter"), "maxiter-state.md");
-        assert_eq!(State::terminal_state_filename("unknown"), "unexpected-state.md");
+        assert_eq!(State::terminal_state_filename("complete"), Some("complete-state.md"));
+        assert_eq!(State::terminal_state_filename("cancel"), Some("cancel-state.md"));
+        assert_eq!(State::terminal_state_filename("maxiter"), Some("maxiter-state.md"));
+        assert_eq!(State::terminal_state_filename("unknown"), None); // Invalid reason returns None
     }
 
     #[test]
