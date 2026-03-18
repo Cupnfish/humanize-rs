@@ -143,8 +143,8 @@ Droid documents direct compatibility with Claude Code plugins, and this reposito
 Claude Code:
 
 ```bash
-claude plugin marketplace add ./
-claude plugin install humanize-rs@humania
+claude plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
+claude plugin install humanize-rs@humania-rs
 ```
 
 Droid:
@@ -164,6 +164,13 @@ The plugin package contains:
 
 The `humanize` executable still comes from `PATH`.
 The binary does not install plugin assets and does not install skills separately.
+
+For local plugin development, you can still add the current checkout as a marketplace:
+
+```bash
+claude plugin marketplace add ./
+claude plugin install humanize-rs@humania-rs
+```
 
 ## Local Development
 

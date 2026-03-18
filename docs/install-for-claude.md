@@ -16,14 +16,19 @@ codex --version
 
 ## Install
 
-From a local clone:
+From GitHub:
+
+```bash
+claude plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
+claude plugin install humanize-rs@humania-rs
+```
+
+From a local clone for development:
 
 ```bash
 claude plugin marketplace add ./
-claude plugin install humanize-rs@humania
+claude plugin install humanize-rs@humania-rs
 ```
-
-From a GitHub checkout, you can also add the repository as a marketplace and install the same plugin package there.
 
 ## What Gets Installed
 
