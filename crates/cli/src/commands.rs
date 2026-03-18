@@ -22,7 +22,9 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::hook_input::{HookInput, HookOutput, get_command, get_file_path, read_hook_input};
+use crate::hook_input::{
+    HookEventKind, HookInput, HookOutput, get_command, get_file_path, read_hook_input,
+};
 use crate::{
     CancelCommands, GateCommands, HookCommands, MonitorCommands, ResumeCommands, SetupCommands,
     StopCommands,
@@ -96,6 +98,15 @@ pub fn handle_resume(cmd: ResumeCommands) -> Result<()> {
 
 /// Handle hook commands - all read JSON from stdin.
 pub fn handle_hook(cmd: HookCommands) -> Result<()> {
+    let hook_event = match cmd {
+        HookCommands::PlanFileValidator => HookEventKind::UserPromptSubmit,
+        HookCommands::PostToolUse => HookEventKind::PostToolUse,
+        HookCommands::ReadValidator
+        | HookCommands::WriteValidator
+        | HookCommands::EditValidator
+        | HookCommands::BashValidator => HookEventKind::PreToolUse,
+    };
+
     // Read hook input from stdin
     let require_tool_name = !matches!(cmd, HookCommands::PlanFileValidator);
     let input = match read_hook_input(require_tool_name) {
@@ -103,7 +114,7 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
         Err(e) => {
             // SECURITY: Fail closed on malformed input - block the operation
             eprintln!("Error: Could not parse hook input: {}", e);
-            HookOutput::block(format!("Hook input validation failed: {}", e)).print();
+            HookOutput::block(format!("Hook input validation failed: {}", e)).print_for(hook_event);
             return Ok(());
         }
     };
@@ -117,7 +128,7 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
         HookCommands::PostToolUse => handle_post_tool_use(&input),
     };
 
-    result.print();
+    result.print_for(hook_event);
     Ok(())
 }
 

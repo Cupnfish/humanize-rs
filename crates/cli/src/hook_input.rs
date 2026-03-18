@@ -13,6 +13,7 @@
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::io::{self, Read};
 
 /// Maximum JSON nesting depth allowed.
@@ -67,10 +68,44 @@ impl HookOutput {
         }
     }
 
-    /// Output as JSON to stdout.
-    pub fn print(&self) {
-        println!("{}", serde_json::to_string(self).unwrap());
+    /// Render in the event-specific hook schema expected by Claude Code.
+    pub fn render_for(&self, event: HookEventKind) -> Option<serde_json::Value> {
+        let Some(reason) = &self.reason else {
+            return None;
+        };
+
+        Some(match event {
+            HookEventKind::UserPromptSubmit => json!({
+                "decision": "block",
+                "reason": reason,
+            }),
+            HookEventKind::PreToolUse => json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            }),
+            HookEventKind::PostToolUse => json!({
+                "decision": "block",
+                "reason": reason,
+            }),
+        })
     }
+
+    /// Output in the event-specific hook schema expected by Claude Code.
+    pub fn print_for(&self, event: HookEventKind) {
+        if let Some(value) = self.render_for(event) {
+            println!("{}", serde_json::to_string(&value).unwrap());
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum HookEventKind {
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
 }
 
 /// Read and parse hook input from stdin.
@@ -184,6 +219,7 @@ mod tests {
         let output = HookOutput::allow();
         assert_eq!(output.decision, "allow");
         assert!(output.reason.is_none());
+        assert!(output.render_for(HookEventKind::PreToolUse).is_none());
     }
 
     #[test]
@@ -191,6 +227,27 @@ mod tests {
         let output = HookOutput::block("Test reason");
         assert_eq!(output.decision, "block");
         assert_eq!(output.reason, Some("Test reason".to_string()));
+
+        let pre_tool = output.render_for(HookEventKind::PreToolUse).unwrap();
+        assert_eq!(
+            pre_tool,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Test reason",
+                }
+            })
+        );
+
+        let prompt_submit = output.render_for(HookEventKind::UserPromptSubmit).unwrap();
+        assert_eq!(
+            prompt_submit,
+            json!({
+                "decision": "block",
+                "reason": "Test reason",
+            })
+        );
     }
 
     #[test]
