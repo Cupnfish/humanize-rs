@@ -22,6 +22,12 @@ humanize gen-plan --input draft.md --output docs/plan.md
 humanize setup rlcr docs/plan.md
 ```
 
+### Resume RLCR
+
+```bash
+humanize resume rlcr
+```
+
 ### RLCR Stop / Gate
 
 ```bash
@@ -35,6 +41,12 @@ humanize gate rlcr
 humanize setup pr --claude
 humanize setup pr --codex
 humanize setup pr --claude --codex
+```
+
+### Resume PR Loop
+
+```bash
+humanize resume pr
 ```
 
 ### Stop PR Loop

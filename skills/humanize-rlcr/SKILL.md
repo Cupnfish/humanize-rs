@@ -17,6 +17,16 @@ Requirement: `humanize` must be available on `PATH`.
 humanize setup rlcr $ARGUMENTS
 ```
 
+## Resume
+
+If an RLCR loop already exists under `.humanize/rlcr/`, resume it instead of starting over:
+
+```bash
+humanize resume rlcr
+```
+
+This will surface the current prompt again and arm session rebinding for host-driven execution.
+
 ## Per-Round Gate
 
 ```bash

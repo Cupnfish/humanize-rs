@@ -12,8 +12,10 @@ Core commands:
 
 ```bash
 humanize setup rlcr <plan>
+humanize resume rlcr
 humanize gate rlcr
 humanize setup pr --claude|--codex
+humanize resume pr
 humanize stop pr
 humanize cancel rlcr
 humanize cancel pr
@@ -31,3 +33,10 @@ Requirements:
 - `gh` is required for PR loop flows
 
 Runtime state is stored under `.humanize/`.
+
+If a host session is lost but `.humanize/` still exists, resume the active loop instead of starting a new one:
+
+```bash
+humanize resume rlcr
+humanize resume pr
+```

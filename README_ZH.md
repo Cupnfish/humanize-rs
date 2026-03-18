@@ -156,7 +156,9 @@ Claude Code：
 ```bash
 /humanize-rs:gen-plan --input draft.md --output docs/plan.md
 /humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
 /humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
 /humanize-rs:cancel-rlcr-loop
 /humanize-rs:ask-codex Explain the latest review result
 ```
@@ -166,7 +168,9 @@ Droid：
 ```bash
 /gen-plan --input draft.md --output docs/plan.md
 /start-rlcr-loop docs/plan.md
+/resume-rlcr-loop
 /start-pr-loop --claude
+/resume-pr-loop
 /cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
@@ -175,7 +179,9 @@ Droid：
 
 - 从 draft 生成 plan
 - 启动 RLCR loop
+- 从 `.humanize/` 恢复现有 RLCR loop
 - 启动 PR loop
+- 从 `.humanize/` 恢复现有 PR loop
 - 取消当前 RLCR 或 PR loop
 - 直接咨询 Codex
 
@@ -193,6 +199,11 @@ Droid：
 4. 每次宿主停止输出时，Humanize hooks 会自动校验状态、触发 Codex review，并决定是继续、阻塞还是推进阶段
 5. 如果你想在终端里实时观察状态，可以额外打开 monitor
 
+如果宿主 session 丢失，但 `.humanize/rlcr/` 还在，不要重新开 loop，直接恢复：
+
+- Claude Code：`/humanize-rs:resume-rlcr-loop`
+- Droid：`/resume-rlcr-loop`
+
 ### 什么时候直接用 CLI
 
 直接调用 `humanize` CLI 主要用于：
@@ -207,7 +218,9 @@ Droid：
 ```bash
 humanize gen-plan --input draft.md --output docs/plan.md
 humanize setup rlcr docs/plan.md
+humanize resume rlcr
 humanize gate rlcr
+humanize resume pr
 humanize ask-codex "Explain the latest review result"
 ```
 

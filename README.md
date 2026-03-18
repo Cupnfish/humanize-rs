@@ -202,7 +202,9 @@ Claude Code:
 ```bash
 /humanize-rs:gen-plan --input draft.md --output docs/plan.md
 /humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
 /humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
 /humanize-rs:cancel-rlcr-loop
 /humanize-rs:ask-codex Explain the latest review result
 ```
@@ -212,7 +214,9 @@ Droid:
 ```bash
 /gen-plan --input draft.md --output docs/plan.md
 /start-rlcr-loop docs/plan.md
+/resume-rlcr-loop
 /start-pr-loop --claude
+/resume-pr-loop
 /cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
@@ -221,7 +225,9 @@ Both hosts expose the same workflow families:
 
 - generate a plan from a draft
 - start an RLCR loop
+- resume an existing RLCR loop from `.humanize/`
 - start a PR loop
+- resume an existing PR loop from `.humanize/`
 - cancel an active RLCR or PR loop
 - consult Codex directly
 
@@ -239,6 +245,11 @@ Both hosts expose the same workflow families:
 4. When the host stops, Humanize hooks automatically validate state, run Codex review, and decide whether to continue, block, or advance the phase.
 5. Use the monitor from a terminal if you want a live view of the loop state.
 
+If the host session is lost but `.humanize/rlcr/` still exists, resume the loop instead of starting over:
+
+- Claude Code: `/humanize-rs:resume-rlcr-loop`
+- Droid: `/resume-rlcr-loop`
+
 ### Direct CLI Usage
 
 Direct CLI usage is mainly for:
@@ -253,7 +264,9 @@ Examples:
 ```bash
 humanize gen-plan --input draft.md --output docs/plan.md
 humanize setup rlcr docs/plan.md
+humanize resume rlcr
 humanize gate rlcr
+humanize resume pr
 humanize ask-codex "Explain the latest review result"
 ```
 
