@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Cupnfish <cupnfish@icloud.com>"]
@@ -40,4 +40,4 @@ tempfile = "3.27"
 toml_edit = "0.22"
 
 # Internal crates
-humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.3.1" }
+humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.3.2" }
