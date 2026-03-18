@@ -162,6 +162,28 @@ What each target installs:
 `humanize install` never installs the executable itself.
 It assumes `humanize` is already on `PATH`.
 
+### Claude Marketplace Installation
+
+Claude marketplace installation is a **two-step** process:
+
+1. install the `humanize` binary on `PATH`
+2. install the Claude plugin package
+
+Example:
+
+```bash
+cargo install humanize-cli --bin humanize
+claude plugin marketplace add ./
+claude plugin install humanize-rs@humania
+```
+
+Validation:
+
+```bash
+which humanize
+claude plugin list
+```
+
 ## Local Development
 
 Inspect the CLI:

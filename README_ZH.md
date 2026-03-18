@@ -133,6 +133,28 @@ humanize install --target all --dry-run
 `humanize install` 不会安装 binary 本身。
 它默认假定 `humanize` 已经在 `PATH` 上。
 
+### Claude Marketplace 安装
+
+通过 Claude marketplace 安装是一个**两步过程**：
+
+1. 先把 `humanize` binary 安装到 `PATH`
+2. 再安装 Claude 插件包
+
+例如：
+
+```bash
+cargo install humanize-cli --bin humanize
+claude plugin marketplace add ./
+claude plugin install humanize-rs@humania
+```
+
+验证：
+
+```bash
+which humanize
+claude plugin list
+```
+
 运行时二进制已经内嵌提示词模板。
 仓库顶层的 `prompt-template/` 和 `skills/` 现在是开发和维护时的源文件目录。
 
