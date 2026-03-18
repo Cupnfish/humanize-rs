@@ -23,6 +23,15 @@ where
     }
 }
 
+fn normalize_empty_session_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || matches!(trimmed, "''" | "\"\"" | "~" | "null") {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Represents the state of an RLCR or PR loop.
 ///
 /// Schema matches setup-rlcr-loop.sh exactly:
@@ -286,8 +295,10 @@ impl State {
 
     /// Serialize state to markdown with YAML frontmatter.
     pub fn to_markdown(&self) -> Result<String, StateError> {
-        let yaml = serde_yaml::to_string(self)
+        let mut yaml = serde_yaml::to_string(self)
             .map_err(|e| StateError::YamlSerializeError(e.to_string()))?;
+        yaml = yaml.replace("session_id: ''\n", "session_id:\n");
+        yaml = yaml.replace("session_id: \"\"\n", "session_id:\n");
 
         // Format: ---\n<yaml>\n---\n\n
         // This matches the Bash implementation's format
@@ -503,7 +514,7 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
                 for line in content.lines() {
                     if line.starts_with("session_id:") {
                         let value = line.strip_prefix("session_id:").unwrap_or("").trim();
-                        return Some(value.to_string());
+                        return normalize_empty_session_id(value);
                     }
                     if line == "---" && !content.starts_with("---") {
                         break; // End of frontmatter
@@ -514,8 +525,7 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
 
         // Empty stored session_id matches any session (backward compatibility)
         let matches_session = match stored_session_id {
-            None => true,                                  // No stored session_id, matches any
-            Some(ref stored) if stored.is_empty() => true, // Empty matches any
+            None => true, // No stored session_id, matches any
             Some(ref stored) => stored == filter_sid,
         };
 
@@ -639,6 +649,8 @@ mod tests {
         let md = state.to_markdown().unwrap();
         assert!(md.starts_with("---\n"));
         assert!(md.contains("current_round: 0"));
+        assert!(md.contains("session_id:\n"));
+        assert!(!md.contains("session_id: ''"));
     }
 
     #[test]

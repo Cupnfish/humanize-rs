@@ -1,16 +1,23 @@
 //! Humanize CLI
 //!
-//! Command-line interface for the Humanize runtime used by the Claude Code and Droid plugin package.
+//! Command-line interface for the Humanize runtime used by Claude Code and Droid.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod commands;
 mod hook_input;
+mod init;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum InitTarget {
+    Claude,
+    Droid,
+}
 
 #[derive(Parser)]
 #[command(name = "humanize")]
-#[command(about = "Humanize CLI - Rust runtime for the Humanize plugin workflows", long_about = None)]
+#[command(about = "Humanize CLI - Rust runtime for the Humanize host workflows", long_about = None)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -76,6 +83,33 @@ enum Commands {
         /// Output plan file
         #[arg(short, long)]
         output: String,
+    },
+
+    /// Install or inspect host integration assets
+    Init {
+        /// Install into the user's host config directory
+        #[arg(short = 'g', long)]
+        global: bool,
+
+        /// Target host
+        #[arg(long, value_enum, default_value = "claude")]
+        target: InitTarget,
+
+        /// Patch the host settings.json without prompting
+        #[arg(long, conflicts_with = "no_patch")]
+        auto_patch: bool,
+
+        /// Skip patching the host settings.json and print manual instructions
+        #[arg(long, conflicts_with = "auto_patch")]
+        no_patch: bool,
+
+        /// Show current Humanize host integration status
+        #[arg(long)]
+        show: bool,
+
+        /// Remove Humanize assets previously installed by init
+        #[arg(long)]
+        uninstall: bool,
     },
 }
 
@@ -293,5 +327,13 @@ fn main() -> Result<()> {
             timeout,
         } => commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout),
         Commands::GenPlan { input, output } => commands::handle_gen_plan(&input, &output),
+        Commands::Init {
+            global,
+            target,
+            auto_patch,
+            no_patch,
+            show,
+            uninstall,
+        } => init::run(target, global, auto_patch, no_patch, show, uninstall),
     }
 }

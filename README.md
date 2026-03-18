@@ -12,8 +12,6 @@ This repository is a Rust rewrite of the original Humanize project:
 
 The workflow model remains compatible, but the implementation and runtime orchestration are now handled by Rust.
 
-The shared plugin package name is `humanize-rs`.
-
 ## Overview
 
 Humanize provides three main workflow families:
@@ -36,14 +34,11 @@ State is stored under `.humanize/` in the working project:
 
 ## Architecture
 
-Humanize is now organized as two shipped artifacts plus one external backend:
+Humanize is now organized as one shipped runtime plus one external backend:
 
 1. `humanize` binary
    The Rust runtime engine. It embeds the prompt templates and owns all loop, hook, validation, monitor, and Codex orchestration logic.
-2. Plugin package
-   The repository-root plugin contents: `.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `skills/`, and `docs/images/`.
-   This same package is used by both Claude Code and Droid.
-3. Codex CLI
+2. Codex CLI
    The review backend used by RLCR, PR validation, and `ask-codex`.
 
 There is no separate Codex-host or Kimi-host installation path anymore.
@@ -54,11 +49,11 @@ Codex is kept only as the independent reviewer backend.
 - `crates/core`: shared state, filesystem, git, codex, and template logic
 - `crates/cli`: the `humanize` executable
 - `prompt-template/`: source prompt templates embedded into the binary
-- `skills/`: plugin-bundled `SKILL.md` files for Claude Code and Droid
-- `hooks/`: plugin hook configuration pointing to `humanize` on `PATH`
-- `commands/`: plugin slash-command definitions
-- `agents/`: supporting agent definitions
-- `.claude-plugin/`: shared plugin metadata
+- `skills/`: host-installed `SKILL.md` files for Claude Code and Droid
+- `hooks/`: host hook configuration pointing to `humanize` on `PATH`
+- `commands/`: host slash-command definitions
+- `agents/`: Claude agent definitions and Droid droid source definitions
+- `.claude-plugin/`: legacy plugin metadata kept for compatibility
 - `docs/`: installation and usage docs
 
 ## Runtime Assets
@@ -76,7 +71,7 @@ Prompt templates live under `prompt-template/`:
 The `humanize` binary embeds these templates.
 The top-level `prompt-template/` directory is the source of truth for development and maintenance.
 
-### Plugin Skills
+### Host Skills
 
 Source skill definitions live under `skills/`:
 
@@ -85,8 +80,7 @@ Source skill definitions live under `skills/`:
 - `skills/humanize-gen-plan/SKILL.md`
 - `skills/humanize-rlcr/SKILL.md`
 
-These skills are part of the plugin package for Claude Code and Droid.
-They are not installed separately.
+These skills are installed into the host by `humanize init`.
 
 ## Installation
 
@@ -94,7 +88,7 @@ The recommended model is:
 
 1. install `humanize` on `PATH`
 2. install `codex` on `PATH`
-3. install the plugin package in Claude Code or Droid
+3. install Humanize into the host
 
 ### 1. Install `humanize` on `PATH`
 
@@ -135,42 +129,52 @@ Verify:
 codex --version
 ```
 
-### 3. Install the Plugin Package
-
-The same plugin package works in both Claude Code and Droid.
-Droid documents direct compatibility with Claude Code plugins, and this repository has been verified locally with `droid plugin install`.
+### 3. Install into the Host
 
 Claude Code:
 
 ```bash
-claude plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
-claude plugin install humanize-rs@humania-rs
+humanize init --global
+# or non-interactive:
+humanize init --global --auto-patch
+```
+
+This installs into `~/.claude/`:
+
+- `commands/` as global `/humanize-*` slash commands
+- `agents/`
+- `skills/`
+- Humanize hook registrations merged into `~/.claude/settings.json`
+
+Validate:
+
+```bash
+humanize init --global --show
 ```
 
 Droid:
 
 ```bash
-droid plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
-droid plugin install humanize-rs@humanize-rs
+humanize init --global --target droid
+# or non-interactive:
+humanize init --global --target droid --auto-patch
 ```
 
-The plugin package contains:
+This installs into `~/.factory/`:
 
-- `.claude-plugin/`
-- `hooks/`
 - `commands/`
-- `agents/`
+- `droids/`
 - `skills/`
+- Humanize hook registrations merged into `~/.factory/settings.json`
 
-The `humanize` executable still comes from `PATH`.
-The binary does not install plugin assets and does not install skills separately.
-
-For local plugin development, you can still add the current checkout as a marketplace:
+Validate:
 
 ```bash
-claude plugin marketplace add ./
-claude plugin install humanize-rs@humania-rs
+humanize init --global --target droid --show
 ```
+
+The `humanize` executable still comes from `PATH`.
+Legacy plugin installation metadata remains in the repository for compatibility, but `humanize init` is now the primary installation path.
 
 ## Local Development
 
@@ -185,39 +189,37 @@ humanize monitor rlcr --help
 
 If `humanize` is not installed on `PATH` yet, you can temporarily replace these examples with `cargo run -- ...` while developing locally.
 
-## Using the Plugin
+## Using Humanize in the Host
 
-Once the plugin is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
-The plugin commands and skills call `humanize` behind the scenes.
+Once Humanize is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
+The host-side commands, skills, and hooks call `humanize` behind the scenes.
 
-Command naming differs by host:
-
-- Claude Code: plugin commands and user-invocable skills are namespaced with `humanize-rs:`
-- Droid: the same commands are exposed without the `humanize-rs:` prefix
+With `humanize init`, both hosts expose the same `/humanize-*` slash commands.
+`ask-codex` remains available as a skill.
 
 ### Quick Start
 
 Claude Code:
 
 ```bash
-/humanize-rs:gen-plan --input draft.md --output docs/plan.md
-/humanize-rs:start-rlcr-loop docs/plan.md
-/humanize-rs:resume-rlcr-loop
-/humanize-rs:start-pr-loop --claude
-/humanize-rs:resume-pr-loop
-/humanize-rs:cancel-rlcr-loop
-/humanize-rs:ask-codex Explain the latest review result
+/humanize-gen-plan --input draft.md --output docs/plan.md
+/humanize-start-rlcr-loop docs/plan.md
+/humanize-resume-rlcr-loop
+/humanize-start-pr-loop --claude
+/humanize-resume-pr-loop
+/humanize-cancel-rlcr-loop
+/ask-codex Explain the latest review result
 ```
 
 Droid:
 
 ```bash
-/gen-plan --input draft.md --output docs/plan.md
-/start-rlcr-loop docs/plan.md
-/resume-rlcr-loop
-/start-pr-loop --claude
-/resume-pr-loop
-/cancel-rlcr-loop
+/humanize-gen-plan --input draft.md --output docs/plan.md
+/humanize-start-rlcr-loop docs/plan.md
+/humanize-resume-rlcr-loop
+/humanize-start-pr-loop --claude
+/humanize-resume-pr-loop
+/humanize-cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
@@ -231,7 +233,7 @@ Both hosts expose the same workflow families:
 - cancel an active RLCR or PR loop
 - consult Codex directly
 
-### What The Plugin Does For You
+### What The Host Install Does For You
 
 - Hooks call the native Rust validators and stop hooks automatically.
 - RLCR and PR loop state is persisted under `.humanize/`.
@@ -239,16 +241,15 @@ Both hosts expose the same workflow families:
 
 ### RLCR User Flow
 
-1. In Claude Code, run `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`. In Droid, run `/gen-plan --input draft.md --output docs/plan.md`.
-2. In Claude Code, run `/humanize-rs:start-rlcr-loop docs/plan.md`. In Droid, run `/start-rlcr-loop docs/plan.md`.
-3. Continue working normally in Claude Code or Droid.
+1. In Claude Code or Droid, run `/humanize-gen-plan --input draft.md --output docs/plan.md`.
+2. Run `/humanize-start-rlcr-loop docs/plan.md`.
+3. Continue working normally in the host.
 4. When the host stops, Humanize hooks automatically validate state, run Codex review, and decide whether to continue, block, or advance the phase.
 5. Use the monitor from a terminal if you want a live view of the loop state.
 
 If the host session is lost but `.humanize/rlcr/` still exists, resume the loop instead of starting over:
 
-- Claude Code: `/humanize-rs:resume-rlcr-loop`
-- Droid: `/resume-rlcr-loop`
+- `/humanize-resume-rlcr-loop`
 
 ### Direct CLI Usage
 
@@ -348,7 +349,7 @@ Examples:
 - `prompt-template/codex/full-alignment-review.md`
 - `prompt-template/pr-loop/round-0-task-has-comments.md`
 
-Update plugin-facing assets in:
+Update host asset sources in:
 
 - `skills/`
 - `hooks/`
@@ -356,7 +357,7 @@ Update plugin-facing assets in:
 - `agents/`
 - `.claude-plugin/`
 
-Then reload or reinstall the plugin in Claude Code or Droid.
+Then rerun `humanize init --global` for the host you use.
 
 ## Additional Documentation
 

@@ -294,6 +294,75 @@ fn full_alignment_round_writes_full_alignment_review_prompt() {
     assert!(review_prompt.contains("FULL GOAL ALIGNMENT CHECK"));
 }
 
+#[test]
+fn resume_then_stop_still_runs_codex_review() {
+    let repo = TestRepo::new();
+    repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n- two\n- three\n");
+    repo.write_state(false, 3);
+    repo.write_goal_tracker();
+    fs::write(
+        repo.loop_dir.join("round-3-prompt.md"),
+        "Resume RLCR prompt\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.loop_dir.join("round-3-summary.md"),
+        "# Round 3 Summary\nImplemented some features.\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.root().join(".humanize/transcript.jsonl"),
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"input\":{\"todos\":[{\"content\":\"Task\",\"status\":\"completed\"}]}}]}}\n",
+    )
+    .unwrap();
+
+    let marker = repo.root().join(".humanize/codex-called.log");
+    let bin_dir = repo.mock_codex(&format!(
+        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  echo CALLED >> \"{}\"\n  cat >/dev/null\n  printf '## Review Feedback\\n\\nSome issues need to be addressed:\\n- Issue 1\\n\\nCONTINUE\\n'\nfi\n",
+        marker.display()
+    ));
+
+    let resume = Command::new(bin())
+        .args(["resume", "rlcr"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+
+    let mut child = Command::new(bin())
+        .args(["stop", "rlcr"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .env(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        write!(
+            stdin,
+            "{{\"session_id\":\"new-session\",\"transcript_path\":\"{}\"}}",
+            repo.root().join(".humanize/transcript.jsonl").display()
+        )
+        .unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"decision\":\"block\""), "stdout={stdout}");
+    assert!(marker.exists(), "codex was not called after resume");
+    let state = fs::read_to_string(repo.loop_dir.join("state.md")).unwrap();
+    assert!(state.contains("current_round: 4"), "state={state}");
+}
+
 fn run(cmd: &mut Command) {
     let status = cmd.status().unwrap();
     assert!(status.success());

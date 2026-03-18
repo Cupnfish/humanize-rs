@@ -3,7 +3,7 @@
 Humanize uses a two-part deployment model:
 
 - `humanize` on `PATH`
-- the shared plugin package from this repository
+- Claude-side assets installed into `~/.claude`
 
 Codex CLI is also required as the review backend.
 
@@ -15,6 +15,31 @@ codex --version
 ```
 
 ## Install
+
+### Option A: Native Claude Install
+
+Recommended when you want a direct `rtk init -g` style setup without plugin management.
+
+```bash
+humanize init --global
+# or:
+humanize init --global --auto-patch
+```
+
+This installs into `~/.claude/`:
+
+- `commands/` as `/humanize-*` slash commands
+- `agents/`
+- `skills/`
+- Humanize hook registrations in `~/.claude/settings.json`
+
+Validate:
+
+```bash
+humanize init --global --show
+```
+
+### Option B: Legacy Plugin Install
 
 From GitHub:
 
@@ -32,20 +57,15 @@ claude plugin install humanize-rs@humania-rs
 
 ## What Gets Installed
 
-The plugin package includes:
+The native install path writes directly into `~/.claude/`.
+Legacy plugin installation remains available only for compatibility.
 
-- `.claude-plugin/`
-- `hooks/`
-- `commands/`
-- `agents/`
-- `skills/`
-
-The `humanize` binary itself is not bundled into the plugin package.
+The `humanize` binary itself is not bundled into host assets.
 It must already be available on `PATH`.
 
 ## Validate
 
 ```bash
 humanize --help
-claude plugin list
+humanize init --global --show
 ```

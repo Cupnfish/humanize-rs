@@ -10,8 +10,6 @@ English version: [README.md](./README.md)
 
 - 原项目：<https://github.com/humania-org/humanize/tree/main>
 
-共享插件包名称是 `humanize-rs`。
-
 ## 概览
 
 Humanize 提供三类核心能力：
@@ -34,14 +32,11 @@ RLCR 工作流：
 
 ## 架构
 
-现在的 Humanize 只保留两类交付物，再加一个外部 review backend：
+现在的 Humanize 只保留一个运行时，再加一个外部 review backend：
 
 1. `humanize` binary
    Rust 运行时引擎。内嵌提示词模板，负责循环、hook、校验、monitor 和 Codex 调度。
-2. 插件包
-   仓库根目录的 `.claude-plugin/`、`hooks/`、`commands/`、`agents/`、`skills/`、`docs/images/`。
-   这同一套包同时给 Claude Code 和 Droid 使用。
-3. Codex CLI
+2. Codex CLI
    RLCR、PR 校验和 `ask-codex` 使用的独立 reviewer backend。
 
 不再保留 Codex/Kimi 作为宿主的单独安装路径。
@@ -52,11 +47,11 @@ Codex 现在只保留 reviewer 角色。
 - `crates/core`：状态、文件、git、codex、模板等核心逻辑
 - `crates/cli`：`humanize` 可执行文件
 - `prompt-template/`：嵌入到 binary 的提示词模板源文件
-- `skills/`：Claude Code / Droid 插件内附带的 `SKILL.md`
-- `hooks/`：插件 hook 配置
-- `commands/`：插件 slash command 定义
-- `agents/`：辅助 agent 定义
-- `.claude-plugin/`：共享插件元数据
+- `skills/`：由 `humanize init` 安装到宿主里的 `SKILL.md`
+- `hooks/`：宿主 hook 配置
+- `commands/`：宿主 slash command 定义
+- `agents/`：Claude agent 与 Droid droid 的源定义
+- `.claude-plugin/`：为兼容性保留的遗留插件元数据
 - `docs/`：安装与使用文档
 
 ## 安装方式
@@ -65,7 +60,7 @@ Codex 现在只保留 reviewer 角色。
 
 1. 先把 `humanize` 安装到 `PATH`
 2. 再把 `codex` 安装到 `PATH`
-3. 最后在 Claude Code 或 Droid 中安装插件包
+3. 最后把 Humanize 安装到宿主里
 
 ### 1. 安装 `humanize`
 
@@ -106,72 +101,88 @@ Humanize 使用 Codex 作为独立 reviewer backend。
 codex --version
 ```
 
-### 3. 安装插件包
-
-同一套插件包同时支持 Claude Code 和 Droid。
-Droid 官方文档说明它可直接兼容 Claude Code 插件，这个仓库也已经在本地通过 `droid plugin install` 验证。
+### 3. 安装到宿主
 
 Claude Code：
 
 ```bash
-claude plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
-claude plugin install humanize-rs@humania-rs
+humanize init --global
+# 或非交互模式：
+humanize init --global --auto-patch
+```
+
+这会直接把资产装进 `~/.claude/`：
+
+- `commands/`，以全局 `/humanize-*` slash command 的形式暴露
+- `agents/`
+- `skills/`
+- 合并进 `~/.claude/settings.json` 的 Humanize hook 配置
+
+验证：
+
+```bash
+humanize init --global --show
 ```
 
 Droid：
 
 ```bash
-droid plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
-droid plugin install humanize-rs@humanize-rs
+droid --version
+humanize init --global --target droid
+# 或非交互模式：
+humanize init --global --target droid --auto-patch
 ```
 
-插件包包含：
+这会直接把资产装进 `~/.factory/`：
 
-- `.claude-plugin/`
-- `hooks/`
 - `commands/`
-- `agents/`
+- `droids/`
 - `skills/`
+- 合并进 `~/.factory/settings.json` 的 Humanize hook 配置
+
+验证：
+
+```bash
+humanize init --global --target droid --show
+```
 
 `humanize` 可执行文件仍然来自 `PATH`。
-binary 不负责安装插件资产，也不再单独安装 skill。
+仓库里仍然保留了 legacy plugin metadata 以兼容老路径，但主安装方式已经切到 `humanize init`。
 
 运行时 binary 已经内嵌提示词模板。
-仓库顶层的 `prompt-template/` 是提示词源文件，`skills/` 是插件包内附带的 skill 源文件。
+仓库顶层的 `prompt-template/` 是提示词源文件，`skills/` 是由 `humanize init` 安装到宿主的 skill 源文件。
 
-## 如何使用插件
+## 如何在宿主里使用 Humanize
 
-安装到 Claude Code 或 Droid 之后，用户的主要入口应该是宿主里的插件命令和 skill，而不是直接调用底层 CLI。
-插件会在后台调用 `humanize`。
+安装到 Claude Code 或 Droid 之后，用户的主要入口应该是宿主里的命令和 skill，而不是直接调用底层 CLI。
+宿主侧的命令、skill 和 hook 会在后台调用 `humanize`。
 
-不同宿主的命令命名不一样：
-
-- Claude Code：插件命令和可直接调用的 skill 带 `humanize-rs:` 前缀
-- Droid：相同命令不带 `humanize-rs:` 前缀
+用 `humanize init` 安装后，两个宿主都会暴露相同的 `/humanize-*` slash command。
+`ask-codex` 仍然作为 skill 可用。
 
 ### 快速开始
 
 Claude Code：
 
 ```bash
-/humanize-rs:gen-plan --input draft.md --output docs/plan.md
-/humanize-rs:start-rlcr-loop docs/plan.md
-/humanize-rs:resume-rlcr-loop
-/humanize-rs:start-pr-loop --claude
-/humanize-rs:resume-pr-loop
-/humanize-rs:cancel-rlcr-loop
-/humanize-rs:ask-codex Explain the latest review result
+/humanize-gen-plan --input draft.md --output docs/plan.md
+/humanize-start-rlcr-loop docs/plan.md
+/humanize-resume-rlcr-loop
+/humanize-start-pr-loop --claude
+/humanize-resume-pr-loop
+/humanize-cancel-rlcr-loop
+/ask-codex Explain the latest review result
 ```
 
 Droid：
 
 ```bash
-/gen-plan --input draft.md --output docs/plan.md
-/start-rlcr-loop docs/plan.md
-/resume-rlcr-loop
-/start-pr-loop --claude
-/resume-pr-loop
-/cancel-rlcr-loop
+/humanize-gen-plan --input draft.md --output docs/plan.md
+/humanize-start-rlcr-loop docs/plan.md
+/humanize-resume-rlcr-loop
+/humanize-start-pr-loop --claude
+/humanize-resume-pr-loop
+/humanize-cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
@@ -185,24 +196,23 @@ Droid：
 - 取消当前 RLCR 或 PR loop
 - 直接咨询 Codex
 
-### 插件会自动处理什么
+### 宿主安装会自动处理什么
 
 - hooks 会自动调用 Rust 实现的 validators 和 stop hooks
 - RLCR / PR loop 状态会保存在 `.humanize/`
-- 插件内附带的 `humanize`、`humanize-rlcr`、`humanize-gen-plan`、`ask-codex` skill 会提供给宿主，并在合适时被自动调用
+- 内附的 `humanize`、`humanize-rlcr`、`humanize-gen-plan`、`ask-codex` skill 会提供给宿主，并在合适时被自动调用
 
 ### RLCR 的典型用户流程
 
-1. Claude Code 中运行 `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`；Droid 中运行 `/gen-plan --input draft.md --output docs/plan.md`
-2. Claude Code 中运行 `/humanize-rs:start-rlcr-loop docs/plan.md`；Droid 中运行 `/start-rlcr-loop docs/plan.md`
-3. 之后继续像平常一样在 Claude Code 或 Droid 中工作
+1. 在 Claude Code 或 Droid 中运行 `/humanize-gen-plan --input draft.md --output docs/plan.md`
+2. 运行 `/humanize-start-rlcr-loop docs/plan.md`
+3. 之后继续像平常一样在宿主里工作
 4. 每次宿主停止输出时，Humanize hooks 会自动校验状态、触发 Codex review，并决定是继续、阻塞还是推进阶段
 5. 如果你想在终端里实时观察状态，可以额外打开 monitor
 
 如果宿主 session 丢失，但 `.humanize/rlcr/` 还在，不要重新开 loop，直接恢复：
 
-- Claude Code：`/humanize-rs:resume-rlcr-loop`
-- Droid：`/resume-rlcr-loop`
+- `/humanize-resume-rlcr-loop`
 
 ### 什么时候直接用 CLI
 
@@ -268,10 +278,10 @@ Gate 返回码：
 - 提示词模板：`prompt-template/`
 - skill 源文件：`skills/`
 
-改完模板或插件资产后：
+改完模板或宿主资产源文件后：
 
 - 重新构建并安装 `humanize` binary
-- 在 Claude Code 或 Droid 中重新加载或重新安装插件
+- 对目标宿主重新执行 `humanize init --global`
 
 ## 其他文档
 

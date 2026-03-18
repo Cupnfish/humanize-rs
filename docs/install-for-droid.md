@@ -1,8 +1,9 @@
 # Install for Droid
 
-Humanize uses the same plugin package for both Claude Code and Droid.
-Droid documents compatibility with Claude Code plugins, and this repository has been validated locally with `droid plugin install`.
-No separate Droid-only asset bundle is maintained.
+Humanize uses a two-part deployment model:
+
+- `humanize` on `PATH`
+- Droid-side assets installed into `~/.factory`
 
 ## Prerequisites
 
@@ -14,38 +15,27 @@ droid --version
 
 ## Install
 
-From GitHub:
+Recommended native install:
 
 ```bash
-droid plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
-droid plugin install humanize-rs@humanize-rs
+humanize init --global --target droid
+# or:
+humanize init --global --target droid --auto-patch
 ```
 
-From a local clone:
+This installs into `~/.factory/`:
 
-```bash
-droid plugin marketplace add /path/to/humanize-rs
-droid plugin install humanize-rs@humanize-rs
-```
-
-If the marketplace name differs in your environment, run `droid plugin marketplace list` and use that marketplace name in `plugin@marketplace`.
-
-## What Gets Installed
-
-The shared plugin package includes:
-
-- `.claude-plugin/`
-- `hooks/`
 - `commands/`
-- `agents/`
+- `droids/`
 - `skills/`
+- Humanize hook registrations in `~/.factory/settings.json`
 
-The `humanize` binary itself is not bundled into the plugin package.
+The `humanize` binary itself is not bundled into host assets.
 It must already be available on `PATH`.
 
 ## Validate
 
 ```bash
 humanize --help
-droid plugin list
+humanize init --global --target droid --show
 ```
