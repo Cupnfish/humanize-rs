@@ -5,10 +5,10 @@
     },
     "plugins": [
         {
+            "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
             "name": "humanize-rs",
             "source": "./",
-            "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
-            "version": "0.2.5"
+            "version": "0.3.0"
         }
     ]
 }

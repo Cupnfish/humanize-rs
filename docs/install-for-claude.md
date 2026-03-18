@@ -3,7 +3,7 @@
 Humanize uses a two-part deployment model:
 
 - `humanize` on `PATH`
-- Claude-side assets installed into `~/.claude`
+- Claude-side plugin installed by Claude Code's native plugin manager
 
 Codex CLI is also required as the review backend.
 
@@ -16,30 +16,26 @@ codex --version
 
 ## Install
 
-### Option A: Native Claude Install
-
-Recommended when you want a direct `rtk init -g` style setup without plugin management.
+### Recommended Install
 
 ```bash
 humanize init --global
-# or:
-humanize init --global --auto-patch
 ```
 
-This installs into `~/.claude/`:
+This command:
 
-- `commands/` as `/humanize-*` slash commands
-- `agents/`
-- `skills/`
-- Humanize hook registrations in `~/.claude/settings.json`
+- adds the Humanize marketplace source if needed
+- installs or updates `humanize-rs` in user scope
+- records the CLI version used for the sync
 
 Validate:
 
 ```bash
 humanize init --global --show
+humanize doctor
 ```
 
-### Option B: Legacy Plugin Install
+### Legacy Manual Plugin Install
 
 From GitHub:
 
@@ -55,12 +51,20 @@ claude plugin marketplace add ./
 claude plugin install humanize-rs@humania-rs
 ```
 
-## What Gets Installed
+## Version Sync
 
-The native install path writes directly into `~/.claude/`.
-Legacy plugin installation remains available only for compatibility.
+`humanize init --global` writes a sync stamp under `~/.claude/`.
+When the `humanize` CLI version changes later, CLI commands warn if the Claude plugin was last synced by a different version.
+`humanize doctor` summarizes this state in one place.
 
-The `humanize` binary itself is not bundled into host assets.
+Project maintainers should use:
+
+```bash
+cargo xtask sync-version
+cargo xtask verify-version-sync
+```
+
+The `humanize` binary itself is not bundled into the plugin.
 It must already be available on `PATH`.
 
 ## Validate
@@ -68,4 +72,5 @@ It must already be available on `PATH`.
 ```bash
 humanize --help
 humanize init --global --show
+humanize doctor
 ```

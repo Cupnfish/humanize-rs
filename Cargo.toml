@@ -3,10 +3,11 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/cli",
+    "xtask",
 ]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Cupnfish <cupnfish@icloud.com>"]
@@ -36,6 +37,7 @@ wait-timeout = "0.2"
 
 # Testing
 tempfile = "3.27"
+toml_edit = "0.22"
 
 # Internal crates
-humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.2.4" }
+humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.3.0" }

@@ -49,10 +49,10 @@ Codex is kept only as the independent reviewer backend.
 - `crates/core`: shared state, filesystem, git, codex, and template logic
 - `crates/cli`: the `humanize` executable
 - `prompt-template/`: source prompt templates embedded into the binary
-- `skills/`: host-installed `SKILL.md` files for Claude Code and Droid
-- `hooks/`: host hook configuration pointing to `humanize` on `PATH`
-- `commands/`: host slash-command definitions
-- `agents/`: Claude agent definitions and Droid droid source definitions
+- `skills/`: plugin package `SKILL.md` source files
+- `hooks/`: plugin hook configuration source files
+- `commands/`: plugin slash-command source files
+- `agents/`: Claude agent and Droid droid source definitions
 - `.claude-plugin/`: legacy plugin metadata kept for compatibility
 - `docs/`: installation and usage docs
 
@@ -135,46 +135,42 @@ Claude Code:
 
 ```bash
 humanize init --global
-# or non-interactive:
-humanize init --global --auto-patch
 ```
 
-This installs into `~/.claude/`:
+This runs Claude Code's native plugin manager for you:
 
-- `commands/` as global `/humanize-*` slash commands
-- `agents/`
-- `skills/`
-- Humanize hook registrations merged into `~/.claude/settings.json`
+- adds the Humanize marketplace source if needed
+- installs or updates the `humanize-rs` plugin in user scope
+- records the synced CLI version so future CLI/plugin mismatches can be detected
 
 Validate:
 
 ```bash
 humanize init --global --show
+humanize doctor
 ```
 
 Droid:
 
 ```bash
 humanize init --global --target droid
-# or non-interactive:
-humanize init --global --target droid --auto-patch
 ```
 
-This installs into `~/.factory/`:
+This runs Droid's native plugin manager for you:
 
-- `commands/`
-- `droids/`
-- `skills/`
-- Humanize hook registrations merged into `~/.factory/settings.json`
+- adds the Humanize marketplace source if needed
+- installs or updates the `humanize-rs` plugin in user scope
+- records the synced CLI version so future CLI/plugin mismatches can be detected
 
 Validate:
 
 ```bash
 humanize init --global --target droid --show
+humanize doctor --target droid
 ```
 
 The `humanize` executable still comes from `PATH`.
-Legacy plugin installation metadata remains in the repository for compatibility, but `humanize init` is now the primary installation path.
+`humanize init` is now the primary installation path.
 
 ## Local Development
 
@@ -189,10 +185,23 @@ humanize monitor rlcr --help
 
 If `humanize` is not installed on `PATH` yet, you can temporarily replace these examples with `cargo run -- ...` while developing locally.
 
+## Versioning
+
+Use the root [Cargo.toml](/home/cupnfish/humanize/Cargo.toml) workspace version as the single source of truth.
+
+When bumping versions:
+
+```bash
+cargo xtask sync-version
+cargo xtask verify-version-sync
+```
+
+`sync-version` updates the plugin manifests under `.claude-plugin/`.
+
 ## Using Humanize in the Host
 
 Once Humanize is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
-The host-side commands, skills, and hooks call `humanize` behind the scenes.
+The installed host plugin calls `humanize` behind the scenes.
 
 With `humanize init`, both hosts expose the same `/humanize-*` slash commands.
 `ask-codex` remains available as a skill.
@@ -233,11 +242,21 @@ Both hosts expose the same workflow families:
 - cancel an active RLCR or PR loop
 - consult Codex directly
 
-### What The Host Install Does For You
+### What Init Does For You
 
-- Hooks call the native Rust validators and stop hooks automatically.
-- RLCR and PR loop state is persisted under `.humanize/`.
-- Bundled skills such as `humanize`, `humanize-rlcr`, `humanize-gen-plan`, and `ask-codex` are available to the host and may be auto-invoked when relevant.
+- Installs or updates the host plugin via the native Claude Code or Droid plugin CLI.
+- Keeps a sync stamp tying the installed plugin to the current `humanize` CLI version.
+- Future CLI runs warn when the host plugin was last synced by a different CLI version.
+
+### Doctor
+
+Use `humanize doctor` to inspect:
+
+- current CLI version
+- marketplace configuration
+- whether the host plugin is installed
+- sync stamp status
+- whether `humanize init` should be rerun
 
 ### RLCR User Flow
 

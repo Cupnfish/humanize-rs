@@ -47,9 +47,9 @@ Codex 现在只保留 reviewer 角色。
 - `crates/core`：状态、文件、git、codex、模板等核心逻辑
 - `crates/cli`：`humanize` 可执行文件
 - `prompt-template/`：嵌入到 binary 的提示词模板源文件
-- `skills/`：由 `humanize init` 安装到宿主里的 `SKILL.md`
-- `hooks/`：宿主 hook 配置
-- `commands/`：宿主 slash command 定义
+- `skills/`：插件包的 `SKILL.md` 源文件
+- `hooks/`：插件 hook 配置源文件
+- `commands/`：插件 slash command 源文件
 - `agents/`：Claude agent 与 Droid droid 的源定义
 - `.claude-plugin/`：为兼容性保留的遗留插件元数据
 - `docs/`：安装与使用文档
@@ -107,21 +107,19 @@ Claude Code：
 
 ```bash
 humanize init --global
-# 或非交互模式：
-humanize init --global --auto-patch
 ```
 
-这会直接把资产装进 `~/.claude/`：
+这会直接调用 Claude Code 自己的 plugin manager：
 
-- `commands/`，以全局 `/humanize-*` slash command 的形式暴露
-- `agents/`
-- `skills/`
-- 合并进 `~/.claude/settings.json` 的 Humanize hook 配置
+- 按需添加 Humanize marketplace source
+- 在 user scope 安装或更新 `humanize-rs` 插件
+- 记录一次与当前 CLI 版本绑定的 sync stamp，用于之后检测 CLI / plugin 是否失配
 
 验证：
 
 ```bash
 humanize init --global --show
+humanize doctor
 ```
 
 Droid：
@@ -129,33 +127,44 @@ Droid：
 ```bash
 droid --version
 humanize init --global --target droid
-# 或非交互模式：
-humanize init --global --target droid --auto-patch
 ```
 
-这会直接把资产装进 `~/.factory/`：
+这会直接调用 Droid 自己的 plugin manager：
 
-- `commands/`
-- `droids/`
-- `skills/`
-- 合并进 `~/.factory/settings.json` 的 Humanize hook 配置
+- 按需添加 Humanize marketplace source
+- 在 user scope 安装或更新 `humanize-rs` 插件
+- 记录一次与当前 CLI 版本绑定的 sync stamp，用于之后检测 CLI / plugin 是否失配
 
 验证：
 
 ```bash
 humanize init --global --target droid --show
+humanize doctor --target droid
 ```
 
 `humanize` 可执行文件仍然来自 `PATH`。
-仓库里仍然保留了 legacy plugin metadata 以兼容老路径，但主安装方式已经切到 `humanize init`。
+主安装方式已经切到 `humanize init`。
 
 运行时 binary 已经内嵌提示词模板。
-仓库顶层的 `prompt-template/` 是提示词源文件，`skills/` 是由 `humanize init` 安装到宿主的 skill 源文件。
+仓库顶层的 `prompt-template/` 是提示词源文件，`skills/`、`commands/`、`agents/`、`hooks/` 是插件包源文件。
+
+## 版本维护
+
+把根目录 [Cargo.toml](/home/cupnfish/humanize/Cargo.toml) 里的 workspace version 当成唯一真源。
+
+升级版本时执行：
+
+```bash
+cargo xtask sync-version
+cargo xtask verify-version-sync
+```
+
+`sync-version` 会自动更新 `.claude-plugin/` 下的 plugin manifest。
 
 ## 如何在宿主里使用 Humanize
 
 安装到 Claude Code 或 Droid 之后，用户的主要入口应该是宿主里的命令和 skill，而不是直接调用底层 CLI。
-宿主侧的命令、skill 和 hook 会在后台调用 `humanize`。
+安装好的宿主插件会在后台调用 `humanize`。
 
 用 `humanize init` 安装后，两个宿主都会暴露相同的 `/humanize-*` slash command。
 `ask-codex` 仍然作为 skill 可用。
@@ -196,11 +205,21 @@ Droid：
 - 取消当前 RLCR 或 PR loop
 - 直接咨询 Codex
 
-### 宿主安装会自动处理什么
+### Init 会自动处理什么
 
-- hooks 会自动调用 Rust 实现的 validators 和 stop hooks
-- RLCR / PR loop 状态会保存在 `.humanize/`
-- 内附的 `humanize`、`humanize-rlcr`、`humanize-gen-plan`、`ask-codex` skill 会提供给宿主，并在合适时被自动调用
+- 通过 Claude Code / Droid 原生 plugin CLI 安装或更新宿主插件
+- 写入一个把当前 `humanize` CLI 版本和宿主插件绑定起来的 sync stamp
+- 之后当 CLI 版本和上次同步版本不一致时，提醒你重新执行 `humanize init`
+
+### Doctor
+
+可以用 `humanize doctor` 检查：
+
+- 当前 CLI 版本
+- marketplace 配置
+- 宿主插件是否已安装
+- sync stamp 状态
+- 是否需要重新执行 `humanize init`
 
 ### RLCR 的典型用户流程
 

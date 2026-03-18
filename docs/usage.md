@@ -5,7 +5,7 @@ This guide describes the native Rust `humanize` workflow.
 Humanize is designed to run as:
 
 - a Rust binary on `PATH`
-- host assets installed into Claude Code or Droid by `humanize init`
+- a host plugin installed into Claude Code or Droid by `humanize init`
 - a Codex-backed review workflow
 
 ## Core Commands
@@ -90,15 +90,11 @@ Humanize stores runtime state under `.humanize/`:
 - `.humanize/pr-loop/`
 - `.humanize/skill/`
 
-## Host Assets
+## Host Plugin Sync
 
-The host install uses:
-
-- `hooks/hooks.json`
-- `commands/`
-- `agents/`
-- `skills/`
+`humanize init --global` delegates installation to Claude Code's plugin manager.
+`humanize init --global --target droid` delegates installation to Droid's plugin manager.
 
 The binary embeds `prompt-template/` internally.
-`humanize init --global` installs these assets into `~/.claude/`.
-`humanize init --global --target droid` installs the adapted assets into `~/.factory/`.
+After each init run, Humanize stores a sync stamp so later CLI runs can warn if the host plugin was last synced by a different CLI version.
+Use `humanize doctor` to review this state on demand.

@@ -85,7 +85,7 @@ enum Commands {
         output: String,
     },
 
-    /// Install or inspect host integration assets
+    /// Install or inspect host plugin integration
     Init {
         /// Install into the user's host config directory
         #[arg(short = 'g', long)]
@@ -95,14 +95,6 @@ enum Commands {
         #[arg(long, value_enum, default_value = "claude")]
         target: InitTarget,
 
-        /// Patch the host settings.json without prompting
-        #[arg(long, conflicts_with = "no_patch")]
-        auto_patch: bool,
-
-        /// Skip patching the host settings.json and print manual instructions
-        #[arg(long, conflicts_with = "auto_patch")]
-        no_patch: bool,
-
         /// Show current Humanize host integration status
         #[arg(long)]
         show: bool,
@@ -110,6 +102,13 @@ enum Commands {
         /// Remove Humanize assets previously installed by init
         #[arg(long)]
         uninstall: bool,
+    },
+
+    /// Diagnose Humanize CLI and host plugin sync status
+    Doctor {
+        /// Target host. Omit to check all supported hosts.
+        #[arg(long, value_enum)]
+        target: Option<InitTarget>,
     },
 }
 
@@ -312,6 +311,10 @@ enum GateCommands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if !matches!(cli.command, Commands::Init { .. } | Commands::Doctor { .. }) {
+        init::warn_if_plugin_version_mismatch();
+    }
+
     match cli.command {
         Commands::Setup(setup_cmd) => commands::handle_setup(setup_cmd),
         Commands::Cancel(cancel_cmd) => commands::handle_cancel(cancel_cmd),
@@ -330,10 +333,9 @@ fn main() -> Result<()> {
         Commands::Init {
             global,
             target,
-            auto_patch,
-            no_patch,
             show,
             uninstall,
-        } => init::run(target, global, auto_patch, no_patch, show, uninstall),
+        } => init::run(target, global, show, uninstall),
+        Commands::Doctor { target } => init::run_doctor(target),
     }
 }
