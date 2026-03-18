@@ -178,81 +178,77 @@ humanize monitor rlcr --help
 
 If `humanize` is not installed on `PATH` yet, you can temporarily replace these examples with `cargo run -- ...` while developing locally.
 
-## Common Workflows
+## Using the Plugin
 
-### Generate a Plan
+Once the plugin is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
+The plugin commands and skills call `humanize` behind the scenes.
+
+With the current plugin name, the namespace is `humanize-rs`.
+
+### Quick Start
+
+Generate a plan from a draft:
+
+```bash
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+```
+
+Start RLCR from that plan:
+
+```bash
+/humanize-rs:start-rlcr-loop docs/plan.md
+```
+
+Start a PR loop:
+
+```bash
+/humanize-rs:start-pr-loop --claude
+/humanize-rs:start-pr-loop --codex
+/humanize-rs:start-pr-loop --claude --codex
+```
+
+Cancel an active loop:
+
+```bash
+/humanize-rs:cancel-rlcr-loop
+/humanize-rs:cancel-pr-loop
+```
+
+Consult Codex directly:
+
+```bash
+/humanize-rs:ask-codex Explain the latest review result
+```
+
+### What The Plugin Does For You
+
+- Hooks call the native Rust validators and stop hooks automatically.
+- RLCR and PR loop state is persisted under `.humanize/`.
+- Bundled skills such as `humanize`, `humanize-rlcr`, `humanize-gen-plan`, and `ask-codex` are available to the host and may be auto-invoked when relevant.
+
+### RLCR User Flow
+
+1. Run `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`.
+2. Run `/humanize-rs:start-rlcr-loop docs/plan.md`.
+3. Continue working normally in Claude Code or Droid.
+4. When the host stops, Humanize hooks automatically validate state, run Codex review, and decide whether to continue, block, or advance the phase.
+5. Use the monitor from a terminal if you want a live view of the loop state.
+
+### Direct CLI Usage
+
+Direct CLI usage is mainly for:
+
+- monitor dashboards
+- debugging
+- manual recovery
+- non-hook environments
+
+Examples:
 
 ```bash
 humanize gen-plan --input draft.md --output docs/plan.md
-```
-
-The native `gen-plan` flow:
-
-- validates input and output
-- checks repository relevance
-- analyzes draft ambiguity and quantitative metrics
-- prompts for clarification in interactive terminals when needed
-- generates the final plan
-- preserves the original draft section
-
-### Start RLCR
-
-```bash
 humanize setup rlcr docs/plan.md
-```
-
-Useful variants:
-
-```bash
-humanize setup rlcr --skip-impl
-humanize setup rlcr docs/plan.md --max-iterations 20 --full-review-round 3
-humanize setup rlcr docs/plan.md --push-every-round
-```
-
-### RLCR Stop / Gate
-
-Direct stop invocation:
-
-```bash
-printf '{}' | humanize stop rlcr
-```
-
-Skill-mode or non-hook gate:
-
-```bash
 humanize gate rlcr
-```
-
-Gate exit codes:
-
-- `0`: allowed
-- `10`: blocked
-- `20`: runtime / infrastructure error
-
-### Start PR Loop
-
-```bash
-humanize setup pr --claude
-humanize setup pr --codex
-humanize setup pr --claude --codex
-```
-
-### Stop PR Loop
-
-```bash
-printf '{}' | humanize stop pr
-```
-
-### Cancel Loops
-
-```bash
-humanize cancel rlcr
-humanize cancel pr
-```
-
-### Ask Codex
-
-```bash
 humanize ask-codex "Explain the latest review result"
 ```
 
@@ -286,6 +282,27 @@ TUI controls:
 Example RLCR monitor TUI:
 
 ![Humanize Monitor TUI](docs/images/monitor-tui.svg)
+
+### Manual Recovery / Hook Debugging
+
+Direct stop invocation:
+
+```bash
+printf '{}' | humanize stop rlcr
+printf '{}' | humanize stop pr
+```
+
+Skill-mode or non-hook gate:
+
+```bash
+humanize gate rlcr
+```
+
+Gate exit codes:
+
+- `0`: allowed
+- `10`: blocked
+- `20`: runtime / infrastructure error
 
 ## Manual Hook Testing
 
