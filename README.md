@@ -57,17 +57,8 @@ Prompt templates live under `prompt-template/`:
 - `prompt-template/plan/`
 - `prompt-template/pr-loop/`
 
-At runtime, the binary resolves templates from:
-
-```bash
-CLAUDE_PLUGIN_ROOT/prompt-template
-```
-
-For local development in this repository:
-
-```bash
-export CLAUDE_PLUGIN_ROOT="$PWD"
-```
+The runtime binary embeds the prompt templates.
+The top-level `prompt-template/` directory is the source of truth for development and maintenance, and release builds vendor a copy into the CLI crate for publishing.
 
 ### Skills
 
@@ -78,14 +69,14 @@ Source skill definitions live under `skills/`:
 - `skills/humanize-gen-plan/SKILL.md`
 - `skills/humanize-rlcr/SKILL.md`
 
-Installed skills use the runtime root for assets, but they expect the `humanize` executable to be available on `PATH`.
+Installed skills expect the `humanize` executable to be available on `PATH`.
 
 ## Installation
 
 The recommended model is:
 
 1. install `humanize` on `PATH`
-2. install runtime assets
+2. install Claude integration files if needed
 3. install skills if needed
 
 ### 1. Install `humanize` on `PATH`
@@ -116,34 +107,39 @@ which humanize
 humanize --help
 ```
 
-### 2. Install Runtime Assets
+### 2. Install Claude Integration Files
 
-Install the runtime assets into a plugin root:
+Install the Claude-facing integration files:
 
 ```bash
 humanize install
 ```
 
-Default plugin-root detection order:
+Default `claude` install-root detection order:
 
 1. `--plugin-root <path>` if provided
 2. `CLAUDE_PLUGIN_ROOT` if set
-3. current working directory
+3. platform-specific global runtime directory
 
-If you want to force a specific target:
+Default global runtime directory:
+
+- Windows: `%APPDATA%\\humanize-rs`
+- macOS: `~/Library/Application Support/humanize-rs`
+- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
+
+If you want to force a specific target root:
 
 ```bash
 humanize install --plugin-root "$PWD"
 ```
 
-This syncs:
+For `--target claude`, this installs:
 
-- `prompt-template/`
 - `hooks/`
 - `commands/`
 - `agents/`
-- `skills/`
 - `.claude-plugin/`
+- `docs/images/`
 
 It does **not** copy the executable. The executable must already be available on `PATH`.
 
@@ -179,16 +175,10 @@ Default skill install locations:
 - Codex: `${CODEX_HOME:-~/.codex}/skills/`
 - Kimi: `~/.config/agents/skills/`
 
+For `--target codex` and `--target kimi`, the installer writes only skill directories.
 Installed skills assume `humanize` is on `PATH`.
 
 ## Local Development
-
-From the repository root:
-
-```bash
-export CLAUDE_PLUGIN_ROOT="$PWD"
-export CLAUDE_PROJECT_DIR="$PWD"
-```
 
 Inspect the CLI:
 

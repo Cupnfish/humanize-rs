@@ -23,4 +23,5 @@ The installer does **not** write a binary into the skills directory.
 Installed skills expect:
 
 - `humanize` on `PATH`
-- runtime assets under `<skills-dir>/humanize/`
+
+The installer writes only skill definitions into the target skills directory.

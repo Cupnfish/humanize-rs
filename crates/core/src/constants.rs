@@ -1,8 +1,5 @@
 //! Constants used throughout the Humanize plugin.
 
-/// Environment variable for the Claude Code plugin root directory.
-pub const ENV_CLAUDE_PLUGIN_ROOT: &str = "CLAUDE_PLUGIN_ROOT";
-
 /// Environment variable for the project directory.
 pub const ENV_CLAUDE_PROJECT_DIR: &str = "CLAUDE_PROJECT_DIR";
 

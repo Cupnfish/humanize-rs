@@ -8,11 +8,17 @@ The runtime executable itself remains `humanize` on `PATH`.
 From the repository root:
 
 ```bash
-export CLAUDE_PLUGIN_ROOT="$PWD"
-export CLAUDE_PROJECT_DIR="$PWD"
 cargo build --release
-humanize install --target claude --plugin-root "$PWD"
+humanize install --target claude
 ```
+
+Default runtime root:
+
+- Windows: `%APPDATA%\\humanize-rs`
+- macOS: `~/Library/Application Support/humanize-rs`
+- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
+
+If your Claude environment needs an explicit runtime root, point it at that installed directory.
 
 Claude hook configuration is in:
 

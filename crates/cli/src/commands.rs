@@ -962,7 +962,6 @@ struct SetupPrOptions {
 
 fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let project_root = resolve_project_root()?;
-    let plugin_root = resolve_plugin_root()?;
 
     let chosen_plan = match (&options.positional_plan_file, &options.explicit_plan_file) {
         (Some(_), Some(_)) => bail!("Error: cannot specify both positional plan file and --plan-file"),
@@ -1031,13 +1030,12 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
 
     fs::create_dir_all(project_root.join(".humanize"))?;
     let pending_session = project_root.join(".humanize/.pending-session-id");
-    let command_signature = plugin_root.join("scripts/setup-rlcr-loop.sh");
     fs::write(
         &pending_session,
         format!(
             "{}\n{}\n",
             loop_dir.join("state.md").display(),
-            command_signature.display()
+            "humanize setup rlcr"
         ),
     )?;
 
@@ -1442,13 +1440,8 @@ fn gen_plan_native(input: &str, output: &str) -> Result<()> {
         bail!("Output file already exists: {}", output_path.display());
     }
 
-    let plugin_root = resolve_plugin_root()?;
-    let template_root = humanize_core::template::template_dir(&plugin_root);
-    let template = humanize_core::template::load_template(
-        &template_root,
-        "plan/gen-plan-template.md",
-    )
-    .context("Plan template file not found")?;
+    let template = embedded_template_contents("plan/gen-plan-template.md")
+        .context("Plan template file not found")?;
     let project_root = resolve_project_root()?;
     ensure_command_exists("codex", "Error: gen-plan requires codex to be installed")?;
 
@@ -2296,29 +2289,6 @@ fn resolve_project_root() -> Result<PathBuf> {
     Ok(std::env::current_dir()?)
 }
 
-fn resolve_plugin_root() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("CLAUDE_PLUGIN_ROOT") {
-        return Ok(PathBuf::from(dir));
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(bin_dir) = exe.parent() {
-            if let Some(root) = bin_dir.parent() {
-                if root.join("prompt-template").is_dir() {
-                    return Ok(root.to_path_buf());
-                }
-            }
-        }
-    }
-
-    let cwd = std::env::current_dir()?;
-    if cwd.join("prompt-template").is_dir() {
-        return Ok(cwd);
-    }
-
-    bail!("Could not determine CLAUDE_PLUGIN_ROOT");
-}
-
 fn newest_active_pr_loop(base_dir: &Path) -> Option<PathBuf> {
     if !base_dir.is_dir() {
         return None;
@@ -2749,24 +2719,10 @@ fn template_vars(pairs: &[(&str, String)]) -> HashMap<String, String> {
         .collect()
 }
 
-fn render_safe_template(
-    template_root: &Path,
-    template_name: &str,
-    fallback: &str,
-    vars: &[(&str, String)],
-) -> String {
-    humanize_core::template::load_and_render_safe(
-        template_root,
-        template_name,
-        fallback,
-        &template_vars(vars),
-    )
-}
-
-fn resolve_template_root() -> Option<PathBuf> {
-    resolve_plugin_root()
-        .ok()
-        .map(|plugin_root| humanize_core::template::template_dir(&plugin_root))
+fn embedded_template_contents(template_name: &str) -> Option<&'static str> {
+    PROMPT_TEMPLATE_ASSETS
+        .get_file(template_name)
+        .and_then(|file| file.contents_utf8())
 }
 
 fn render_template_or_fallback(
@@ -2774,8 +2730,8 @@ fn render_template_or_fallback(
     fallback: &str,
     vars: &[(&str, String)],
 ) -> String {
-    if let Some(template_root) = resolve_template_root() {
-        render_safe_template(&template_root, template_name, fallback, vars)
+    if let Some(template) = embedded_template_contents(template_name) {
+        humanize_core::template::render_template(template, &template_vars(vars))
     } else {
         humanize_core::template::render_template(fallback, &template_vars(vars))
     }
@@ -3986,9 +3942,6 @@ fn handle_stop_pr() -> Result<()> {
 
     ensure_command_exists("gh", "Error: PR loop requires GitHub CLI (gh)")?;
 
-    let plugin_root = resolve_plugin_root()?;
-    let template_root = humanize_core::template::template_dir(&plugin_root);
-
     let state_content = fs::read_to_string(&state_file)
         .context("Malformed PR loop state file, blocking operation for safety")?;
     let mut state = humanize_core::state::State::from_markdown(&state_content)
@@ -4068,8 +4021,7 @@ fn handle_stop_pr() -> Result<()> {
     let ahead_count = pr_ahead_count(&project_root, &pr_repo, pr_number)?;
     if ahead_count > 0 {
         let current_branch = git_current_branch(&project_root).unwrap_or_else(|_| "main".to_string());
-        let reason = render_safe_template(
-            &template_root,
+        let reason = render_template_or_fallback(
             "block/unpushed-commits.md",
             "# Unpushed Commits Detected\n\nYou have {{AHEAD_COUNT}} unpushed commit(s). PR loop requires pushing changes so bots can review them.\n\nPlease push: git push origin {{CURRENT_BRANCH}}",
             &[
@@ -4098,8 +4050,7 @@ fn handle_stop_pr() -> Result<()> {
             state.trigger_comment_id = None;
             state.save(&state_file)?;
 
-            let reason = render_safe_template(
-                &template_root,
+            let reason = render_template_or_fallback(
                 "block/force-push-detected.md",
                 "# Force Push Detected\n\nA force push (history rewrite) has been detected. Post a new @bot trigger comment: {{BOT_MENTION_STRING}}",
                 &[
@@ -4194,8 +4145,7 @@ fn handle_stop_pr() -> Result<()> {
             "5" => "New commits after partial bot reviews",
             _ => "Subsequent round requires trigger",
         };
-        let reason = render_safe_template(
-            &template_root,
+        let reason = render_template_or_fallback(
             "block/no-trigger-comment.md",
             "# Missing Trigger Comment\n\nNo @bot mention found. Please run: gh pr comment {{PR_NUMBER}} --body \"{{BOT_MENTION_STRING}} please review\"",
             &[
@@ -4223,8 +4173,7 @@ fn handle_stop_pr() -> Result<()> {
             )?
             .is_none()
             {
-                let reason = render_safe_template(
-                    &template_root,
+                let reason = render_template_or_fallback(
                     "block/claude-eyes-timeout.md",
                     "# Claude Bot Not Responding\n\nThe Claude bot did not respond with an 'eyes' reaction within 15 seconds (3 x 5s retries).\nPlease verify the Claude bot is installed and configured for this repository.",
                     &[
@@ -5932,11 +5881,9 @@ pub fn handle_install(
 }
 
 fn install_runtime_assets_into(plugin_root: &Path, dry_run: bool) -> Result<()> {
-    copy_embedded_dir(&PROMPT_TEMPLATE_ASSETS, &plugin_root.join("prompt-template"), dry_run)?;
     copy_embedded_dir(&HOOK_ASSETS, &plugin_root.join("hooks"), dry_run)?;
     copy_embedded_dir(&COMMAND_ASSETS, &plugin_root.join("commands"), dry_run)?;
     copy_embedded_dir(&AGENT_ASSETS, &plugin_root.join("agents"), dry_run)?;
-    copy_embedded_dir(&SKILL_ASSETS, &plugin_root.join("skills"), dry_run)?;
     copy_embedded_dir(&CLAUDE_PLUGIN_ASSETS, &plugin_root.join(".claude-plugin"), dry_run)?;
     copy_embedded_dir(&DOC_IMAGE_ASSETS, &plugin_root.join("docs/images"), dry_run)?;
     println!("Using plugin root: {}", plugin_root.display());
@@ -5955,7 +5902,48 @@ fn detect_install_plugin_root(plugin_root: Option<&str>) -> Result<PathBuf> {
         }
     }
 
-    Ok(std::env::current_dir()?)
+    default_claude_plugin_root()
+}
+
+fn default_claude_plugin_root() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            if !appdata.trim().is_empty() {
+                return Ok(PathBuf::from(appdata).join("humanize-rs"));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.trim().is_empty() {
+                return Ok(
+                    PathBuf::from(home)
+                        .join("Library")
+                        .join("Application Support")
+                        .join("humanize-rs"),
+                );
+            }
+        }
+    }
+
+    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+        if !xdg_data_home.trim().is_empty() {
+            return Ok(PathBuf::from(xdg_data_home).join("humanize-rs"));
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return Ok(PathBuf::from(home).join(".local").join("share").join("humanize-rs"));
+        }
+    }
+
+    bail!(
+        "Could not determine a default plugin root. Use --plugin-root or set CLAUDE_PLUGIN_ROOT."
+    )
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -5990,48 +5978,6 @@ fn copy_embedded_dir(dir: &Dir<'_>, dst: &Path, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn strip_user_invocable_frontmatter(content: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    for line in content.lines() {
-        if !frontmatter_done && line.trim() == "---" {
-            in_frontmatter = !in_frontmatter;
-            if !in_frontmatter {
-                frontmatter_done = true;
-            }
-            out.push(line.to_string());
-            continue;
-        }
-        if in_frontmatter && line.trim_start().starts_with("user-invocable:") {
-            continue;
-        }
-        out.push(line.to_string());
-    }
-    let mut rendered = out.join("\n");
-    if content.ends_with('\n') {
-        rendered.push('\n');
-    }
-    rendered
-}
-
-fn rewrite_skill_content(content: &str, runtime_root: &Path) -> String {
-    let runtime_root_str = runtime_root.display().to_string();
-    let rendered = content.replace("{{HUMANIZE_RUNTIME_ROOT}}", &runtime_root_str);
-    strip_user_invocable_frontmatter(&rendered)
-}
-
-fn hydrate_installed_skill(skill_file: &Path, runtime_root: &Path, dry_run: bool) -> Result<()> {
-    if dry_run {
-        println!("DRY-RUN hydrate {}", skill_file.display());
-        return Ok(());
-    }
-    let content = fs::read_to_string(skill_file)?;
-    let rendered = rewrite_skill_content(&content, runtime_root);
-    fs::write(skill_file, rendered)?;
-    Ok(())
-}
-
 fn default_kimi_skills_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".config/agents/skills"))
@@ -6046,7 +5992,6 @@ fn default_codex_skills_dir() -> Result<PathBuf> {
 }
 
 fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
-    let runtime_root = skills_dir.join("humanize");
     let skill_names = ["ask-codex", "humanize", "humanize-gen-plan", "humanize-rlcr"];
 
     if dry_run {
@@ -6067,19 +6012,8 @@ fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
         }
     }
 
-    if dry_run {
-        println!("DRY-RUN sync prompt-template -> {}", runtime_root.join("prompt-template").display());
-    } else {
-        copy_embedded_dir(&PROMPT_TEMPLATE_ASSETS, &runtime_root.join("prompt-template"), false)?;
-    }
-
-    for skill_name in &skill_names {
-        hydrate_installed_skill(&skills_dir.join(skill_name).join("SKILL.md"), &runtime_root, dry_run)?;
-    }
-
     println!("Skills synced to {}", skills_dir.display());
-    println!("Runtime root: {}", runtime_root.display());
-    println!("Ensure `humanize` is installed on PATH before using the installed skills.");
+    println!("Installed skills expect `humanize` to be available on PATH.");
     Ok(())
 }
 

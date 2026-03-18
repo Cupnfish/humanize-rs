@@ -79,17 +79,23 @@ which humanize
 humanize --help
 ```
 
-### 2. 安装运行时 assets
+### 2. 安装 Claude 集成文件
 
 ```bash
 humanize install
 ```
 
-默认探测顺序：
+`claude` 目标的默认探测顺序：
 
 1. 如果传了 `--plugin-root <path>`，优先使用它
 2. 否则如果设置了 `CLAUDE_PLUGIN_ROOT`，使用该路径
-3. 否则使用当前工作目录
+3. 否则使用平台默认的全局运行时目录
+
+默认全局运行时目录：
+
+- Windows: `%APPDATA%\\humanize-rs`
+- macOS: `~/Library/Application Support/humanize-rs`
+- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
 
 如果你想强制安装到指定目录：
 
@@ -97,17 +103,15 @@ humanize install
 humanize install --plugin-root "$PWD"
 ```
 
-这个步骤会同步：
+对于 `--target claude`，安装器会写入：
 
-- `prompt-template/`
 - `hooks/`
 - `commands/`
 - `agents/`
-- `skills/`
 - `.claude-plugin/`
+- `docs/images/`
 
-不会复制 binary。
-binary 必须已经在 `PATH` 上。
+不会复制 binary，binary 必须已经在 `PATH` 上。
 
 ### 3. 安装 skills
 
@@ -125,14 +129,11 @@ humanize install --target kimi
 
 如果当前机器上还没有把 `humanize` 装到 `PATH`，本地开发时也可以临时用 `cargo run -- ...` 代替。
 
+对于 `--target codex` 和 `--target kimi`，安装器只写入 skill 目录。
 安装后的 skill 默认假定 `humanize` 已经在 `PATH` 上。
 
-## 本地开发
-
-```bash
-export CLAUDE_PLUGIN_ROOT="$PWD"
-export CLAUDE_PROJECT_DIR="$PWD"
-```
+运行时二进制已经内嵌提示词模板。
+仓库顶层的 `prompt-template/` 和 `skills/` 现在是开发和维护时的源文件目录。
 
 ## 常用命令
 

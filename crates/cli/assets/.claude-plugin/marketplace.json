@@ -8,7 +8,7 @@
       "name": "humanize-rs",
       "source": "./",
       "description": "Humanize RS - Rust implementation of the Humanize iterative development workflow with independent Codex review.",
-      "version": "0.1.0"
+      "version": "0.1.3"
     }
   ]
 }
