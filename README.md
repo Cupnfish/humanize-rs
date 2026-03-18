@@ -190,42 +190,40 @@ If `humanize` is not installed on `PATH` yet, you can temporarily replace these 
 Once the plugin is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
 The plugin commands and skills call `humanize` behind the scenes.
 
-With the current plugin name, the namespace is `humanize-rs`.
+Command naming differs by host:
+
+- Claude Code: plugin commands and user-invocable skills are namespaced with `humanize-rs:`
+- Droid: the same commands are exposed without the `humanize-rs:` prefix
 
 ### Quick Start
 
-Generate a plan from a draft:
+Claude Code:
 
 ```bash
 /humanize-rs:gen-plan --input draft.md --output docs/plan.md
-```
-
-Start RLCR from that plan:
-
-```bash
 /humanize-rs:start-rlcr-loop docs/plan.md
-```
-
-Start a PR loop:
-
-```bash
 /humanize-rs:start-pr-loop --claude
-/humanize-rs:start-pr-loop --codex
-/humanize-rs:start-pr-loop --claude --codex
-```
-
-Cancel an active loop:
-
-```bash
 /humanize-rs:cancel-rlcr-loop
-/humanize-rs:cancel-pr-loop
-```
-
-Consult Codex directly:
-
-```bash
 /humanize-rs:ask-codex Explain the latest review result
 ```
+
+Droid:
+
+```bash
+/gen-plan --input draft.md --output docs/plan.md
+/start-rlcr-loop docs/plan.md
+/start-pr-loop --claude
+/cancel-rlcr-loop
+/ask-codex Explain the latest review result
+```
+
+Both hosts expose the same workflow families:
+
+- generate a plan from a draft
+- start an RLCR loop
+- start a PR loop
+- cancel an active RLCR or PR loop
+- consult Codex directly
 
 ### What The Plugin Does For You
 
@@ -235,8 +233,8 @@ Consult Codex directly:
 
 ### RLCR User Flow
 
-1. Run `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`.
-2. Run `/humanize-rs:start-rlcr-loop docs/plan.md`.
+1. In Claude Code, run `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`. In Droid, run `/gen-plan --input draft.md --output docs/plan.md`.
+2. In Claude Code, run `/humanize-rs:start-rlcr-loop docs/plan.md`. In Droid, run `/start-rlcr-loop docs/plan.md`.
 3. Continue working normally in Claude Code or Droid.
 4. When the host stops, Humanize hooks automatically validate state, run Codex review, and decide whether to continue, block, or advance the phase.
 5. Use the monitor from a terminal if you want a live view of the loop state.

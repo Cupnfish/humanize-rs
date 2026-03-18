@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Cupnfish <cupnfish@icloud.com>"]
@@ -37,4 +37,4 @@ wait-timeout = "0.2"
 tempfile = "3.27"
 
 # Internal crates
-humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.2.1" }
+humanize-core = { package = "humanize-cli-core", path = "crates/core", version = "0.2.2" }

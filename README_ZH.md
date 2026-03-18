@@ -144,42 +144,40 @@ binary 不负责安装插件资产，也不再单独安装 skill。
 安装到 Claude Code 或 Droid 之后，用户的主要入口应该是宿主里的插件命令和 skill，而不是直接调用底层 CLI。
 插件会在后台调用 `humanize`。
 
-当前插件名是 `humanize-rs`，所以命名空间也是 `humanize-rs`。
+不同宿主的命令命名不一样：
+
+- Claude Code：插件命令和可直接调用的 skill 带 `humanize-rs:` 前缀
+- Droid：相同命令不带 `humanize-rs:` 前缀
 
 ### 快速开始
 
-先从 draft 生成计划：
+Claude Code：
 
 ```bash
 /humanize-rs:gen-plan --input draft.md --output docs/plan.md
-```
-
-再启动 RLCR：
-
-```bash
 /humanize-rs:start-rlcr-loop docs/plan.md
-```
-
-启动 PR loop：
-
-```bash
 /humanize-rs:start-pr-loop --claude
-/humanize-rs:start-pr-loop --codex
-/humanize-rs:start-pr-loop --claude --codex
-```
-
-取消当前 loop：
-
-```bash
 /humanize-rs:cancel-rlcr-loop
-/humanize-rs:cancel-pr-loop
-```
-
-直接咨询 Codex：
-
-```bash
 /humanize-rs:ask-codex Explain the latest review result
 ```
+
+Droid：
+
+```bash
+/gen-plan --input draft.md --output docs/plan.md
+/start-rlcr-loop docs/plan.md
+/start-pr-loop --claude
+/cancel-rlcr-loop
+/ask-codex Explain the latest review result
+```
+
+两个宿主暴露的是同一套工作流能力：
+
+- 从 draft 生成 plan
+- 启动 RLCR loop
+- 启动 PR loop
+- 取消当前 RLCR 或 PR loop
+- 直接咨询 Codex
 
 ### 插件会自动处理什么
 
@@ -189,8 +187,8 @@ binary 不负责安装插件资产，也不再单独安装 skill。
 
 ### RLCR 的典型用户流程
 
-1. 运行 `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`
-2. 运行 `/humanize-rs:start-rlcr-loop docs/plan.md`
+1. Claude Code 中运行 `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`；Droid 中运行 `/gen-plan --input draft.md --output docs/plan.md`
+2. Claude Code 中运行 `/humanize-rs:start-rlcr-loop docs/plan.md`；Droid 中运行 `/start-rlcr-loop docs/plan.md`
 3. 之后继续像平常一样在 Claude Code 或 Droid 中工作
 4. 每次宿主停止输出时，Humanize hooks 会自动校验状态、触发 Codex review，并决定是继续、阻塞还是推进阶段
 5. 如果你想在终端里实时观察状态，可以额外打开 monitor
