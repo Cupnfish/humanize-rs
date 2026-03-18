@@ -1,19 +1,19 @@
 {
-  "name": "humanize-rs",
-  "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
-  "version": "0.2.4",
-  "author": {
-    "name": "Cupnfish"
-  },
-  "repository": "https://github.com/Cupnfish/humanize-rs",
-  "homepage": "https://github.com/Cupnfish/humanize-rs#readme",
-  "license": "MIT",
-  "keywords": [
-    "iterative-development",
-    "codex-review",
-    "ai-native",
-    "feedback-loop",
-    "goal-tracking",
-    "quality-assurance"
-  ]
+    "name": "humanize-rs",
+    "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
+    "version": "0.2.5",
+    "author": {
+        "name": "Cupnfish"
+    },
+    "repository": "https://github.com/Cupnfish/humanize-rs",
+    "homepage": "https://github.com/Cupnfish/humanize-rs#readme",
+    "license": "MIT",
+    "keywords": [
+        "iterative-development",
+        "codex-review",
+        "ai-native",
+        "feedback-loop",
+        "goal-tracking",
+        "quality-assurance"
+    ]
 }

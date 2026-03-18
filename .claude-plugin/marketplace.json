@@ -1,14 +1,14 @@
 {
-  "name": "humania-rs",
-  "owner": {
-    "name": "Cupnfish"
-  },
-  "plugins": [
-    {
-      "name": "humanize-rs",
-      "source": "./",
-      "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
-      "version": "0.2.4"
-    }
-  ]
+    "name": "humania-rs",
+    "owner": {
+        "name": "Cupnfish"
+    },
+    "plugins": [
+        {
+            "name": "humanize-rs",
+            "source": "./",
+            "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
+            "version": "0.2.5"
+        }
+    ]
 }
