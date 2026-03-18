@@ -123,10 +123,26 @@ fn install_global(target: InitTarget) -> Result<()> {
     let marketplace_name = ensure_marketplace(target, &source)?;
     let plugin_spec = format!("{PLUGIN_NAME}@{marketplace_name}");
 
-    let action = ensure_plugin_installed(target, &plugin_spec)?;
+    let current_version = current_cli_version();
+    let existing = plugin_install_status(target)?;
+    let previous_stamp = read_stamp(target)?;
+    let action = if existing.installed
+        && existing.version.as_deref() == Some(current_version)
+        && previous_stamp
+            .as_ref()
+            .map(|stamp| stamp.cli_version == current_version && stamp.plugin_spec == plugin_spec)
+            .unwrap_or(false)
+    {
+        "already in sync"
+    } else if existing.installed && existing.version.as_deref() == Some(current_version) {
+        "already installed"
+    } else {
+        ensure_plugin_installed(target, &plugin_spec)?
+    };
+
     let stamp = PluginSyncStamp {
         target: target_name(target).to_string(),
-        cli_version: current_cli_version().to_string(),
+        cli_version: current_version.to_string(),
         plugin_name: PLUGIN_NAME.to_string(),
         plugin_spec: plugin_spec.clone(),
         marketplace_name: marketplace_name.clone(),
@@ -144,7 +160,7 @@ fn install_global(target: InitTarget) -> Result<()> {
     println!("  Source:      {}", source);
     println!("  Marketplace: {}", marketplace_name);
     println!("  Plugin:      {}", plugin_spec);
-    println!("  CLI Version: {}", current_cli_version());
+    println!("  CLI Version: {}", current_version);
     println!("  Scope:       user");
     println!(
         "\n  Restart {}. If you upgrade the CLI later, rerun `humanize init --global{}`.",
@@ -321,6 +337,11 @@ fn ensure_plugin_installed(target: InitTarget, plugin_spec: &str) -> Result<&'st
 
 fn ensure_marketplace(target: InitTarget, source: &str) -> Result<String> {
     let add = run_host_command(target, &["plugin", "marketplace", "add", source])?;
+    if add.status.success()
+        && let Some(name) = parse_marketplace_name_from_add_output(target, &add)
+    {
+        return Ok(name);
+    }
     let marketplaces = list_marketplaces(target)?;
     if let Some(found) = marketplaces
         .iter()
@@ -334,6 +355,29 @@ fn ensure_marketplace(target: InitTarget, source: &str) -> Result<String> {
         host_display_name(target),
         render_output(&add),
     )
+}
+
+fn parse_marketplace_name_from_add_output(target: InitTarget, output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+
+    match target {
+        InitTarget::Claude => {
+            let needle = "Marketplace '";
+            let start = combined.find(needle)? + needle.len();
+            let rest = &combined[start..];
+            let end = rest.find('\'')?;
+            let name = rest[..end].trim();
+            (!name.is_empty()).then(|| name.to_string())
+        }
+        InitTarget::Droid => {
+            let needle = "Successfully added marketplace:";
+            let start = combined.find(needle)? + needle.len();
+            let name = combined[start..].lines().next()?.trim();
+            (!name.is_empty()).then(|| name.to_string())
+        }
+    }
 }
 
 fn list_marketplaces(target: InitTarget) -> Result<Vec<MarketplaceRecord>> {
@@ -757,5 +801,37 @@ Registered marketplaces:
             "GitHub (Cupnfish/humanize-rs)",
             "https://github.com/Cupnfish/humanize-rs.git"
         ));
+    }
+
+    #[test]
+    fn parse_claude_marketplace_name_from_add_output() {
+        let output = Output {
+            status: exit_status(0),
+            stdout: b"Adding marketplace...\n\xe2\x88\x9a Marketplace 'humania-rs' already on disk \xe2\x80\x94 declared in user settings\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            parse_marketplace_name_from_add_output(InitTarget::Claude, &output).as_deref(),
+            Some("humania-rs")
+        );
+    }
+
+    #[test]
+    fn parse_droid_marketplace_name_from_add_output() {
+        let output = Output {
+            status: exit_status(0),
+            stdout: b"Successfully added marketplace: humanize\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            parse_marketplace_name_from_add_output(InitTarget::Droid, &output).as_deref(),
+            Some("humanize")
+        );
+    }
+
+    #[cfg(unix)]
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code << 8)
     }
 }
