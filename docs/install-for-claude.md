@@ -1,36 +1,46 @@
 # Install for Claude Code
 
-This repository exposes the Claude plugin package as `humanize-rs`.
-The runtime executable itself remains `humanize` on `PATH`.
+Humanize uses a two-part deployment model:
 
-## Local Development
+- `humanize` on `PATH`
+- the shared plugin package from this repository
 
-From the repository root:
+Codex CLI is also required as the review backend.
+
+## Prerequisites
 
 ```bash
-cargo build --release
-humanize install --target claude
+humanize --help
+codex --version
 ```
 
-Default runtime root:
+## Install
 
-- Windows: `%APPDATA%\\humanize-rs`
-- macOS: `~/Library/Application Support/humanize-rs`
-- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
+From a local clone:
 
-If your Claude environment needs an explicit runtime root, point it at that installed directory.
-
-Claude hook configuration is in:
-
-```text
-hooks/hooks.json
+```bash
+claude plugin marketplace add ./
+claude plugin install humanize-rs@humania
 ```
 
-and points directly at `humanize` on `PATH`.
+From a GitHub checkout, you can also add the repository as a marketplace and install the same plugin package there.
+
+## What Gets Installed
+
+The plugin package includes:
+
+- `.claude-plugin/`
+- `hooks/`
+- `commands/`
+- `agents/`
+- `skills/`
+
+The `humanize` binary itself is not bundled into the plugin package.
+It must already be available on `PATH`.
 
 ## Validate
 
 ```bash
 humanize --help
-cat hooks/hooks.json
+claude plugin list
 ```

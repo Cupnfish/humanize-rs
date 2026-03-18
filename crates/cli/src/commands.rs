@@ -1,18 +1,18 @@
 //! Command handlers for the Humanize CLI.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -22,18 +22,14 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::hook_input::{get_command, get_file_path, read_hook_input, HookInput, HookOutput};
-use crate::{CancelCommands, GateCommands, HookCommands, MonitorCommands, SetupCommands, StopCommands};
+use crate::hook_input::{HookInput, HookOutput, get_command, get_file_path, read_hook_input};
+use crate::{
+    CancelCommands, GateCommands, HookCommands, MonitorCommands, SetupCommands, StopCommands,
+};
 
 // Vendored runtime assets live inside the CLI crate so `cargo package` and
 // crates.io builds can embed them without depending on workspace-relative paths.
 static PROMPT_TEMPLATE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/prompt-template");
-static SKILL_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
-static HOOK_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/hooks");
-static COMMAND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/commands");
-static AGENT_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/agents");
-static CLAUDE_PLUGIN_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/.claude-plugin");
-static DOC_IMAGE_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/docs/images");
 
 /// Handle setup commands.
 pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
@@ -85,9 +81,7 @@ pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
 pub fn handle_cancel(cmd: CancelCommands) -> Result<()> {
     match cmd {
         CancelCommands::Rlcr { force } => cancel_rlcr_native(force),
-        CancelCommands::Pr => {
-            cancel_pr_native()
-        }
+        CancelCommands::Pr => cancel_pr_native(),
     }
 }
 
@@ -136,25 +130,30 @@ fn validate_read(input: &HookInput) -> HookOutput {
         // Try to find active loop and check allowlist
         let project_root = match std::env::var("CLAUDE_PROJECT_DIR") {
             Ok(p) => p,
-            Err(_) => return HookOutput::block(format!(
-                "Reading todos files is not allowed: {}",
-                file_path
-            )),
+            Err(_) => {
+                return HookOutput::block(format!(
+                    "Reading todos files is not allowed: {}",
+                    file_path
+                ));
+            }
         };
 
         let loop_base_dir = format!("{}/.humanize/rlcr", project_root);
         let session_id = input.session_id.as_deref();
 
-        if let Some(loop_dir) = humanize_core::state::find_active_loop(
-            std::path::Path::new(&loop_base_dir),
-            session_id,
-        ) {
+        if let Some(loop_dir) =
+            humanize_core::state::find_active_loop(std::path::Path::new(&loop_base_dir), session_id)
+        {
             // Parse state to get current round
             let state_file = humanize_core::state::resolve_active_state_file(&loop_dir);
             if let Some(state_path) = state_file {
                 if let Ok(content) = std::fs::read_to_string(&state_path) {
                     if let Ok(state) = humanize_core::state::State::from_markdown_strict(&content) {
-                        if humanize_core::fs::is_allowlisted_file(&file_path, &loop_dir, state.current_round) {
+                        if humanize_core::fs::is_allowlisted_file(
+                            &file_path,
+                            &loop_dir,
+                            state.current_round,
+                        ) {
                             return HookOutput::allow();
                         }
                     }
@@ -169,8 +168,14 @@ fn validate_read(input: &HookInput) -> HookOutput {
     }
 
     // Check for summary/prompt files
-    let is_summary = humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Summary);
-    let is_prompt = humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt);
+    let is_summary = humanize_core::fs::is_round_file_type(
+        &path_lower,
+        humanize_core::fs::RoundFileType::Summary,
+    );
+    let is_prompt = humanize_core::fs::is_round_file_type(
+        &path_lower,
+        humanize_core::fs::RoundFileType::Prompt,
+    );
 
     if !is_summary && !is_prompt {
         return HookOutput::allow(); // Not a round file, allow
@@ -206,7 +211,11 @@ fn validate_read(input: &HookInput) -> HookOutput {
 
     let state = match humanize_core::state::State::from_markdown_strict(&state_content) {
         Ok(s) => s,
-        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety".to_string()),
+        Err(_) => {
+            return HookOutput::block(
+                "Malformed state file, blocking operation for safety".to_string(),
+            );
+        }
     };
 
     let current_round = state.current_round;
@@ -283,7 +292,8 @@ fn validate_write(input: &HookInput) -> HookOutput {
     }
 
     // Block prompt files (read-only, generated by Codex)
-    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt) {
+    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt)
+    {
         return HookOutput::block(render_template_or_fallback(
             "block/prompt-file-write.md",
             "# Prompt File Write Blocked\n\nYou cannot write to `round-*-prompt.md` files.",
@@ -310,7 +320,10 @@ fn validate_write(input: &HookInput) -> HookOutput {
     }
 
     // Check if this is a summary file or goal-tracker that needs loop-aware validation
-    let is_summary = humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Summary);
+    let is_summary = humanize_core::fs::is_round_file_type(
+        &path_lower,
+        humanize_core::fs::RoundFileType::Summary,
+    );
     let is_finalize_summary = path_lower.ends_with("finalize-summary.md");
     let is_goal_tracker = path_lower.ends_with("goal-tracker.md");
     let in_humanize_loop_dir = humanize_core::fs::is_in_humanize_loop_dir(&path_lower);
@@ -349,14 +362,22 @@ fn validate_write(input: &HookInput) -> HookOutput {
 
     let state = match humanize_core::state::State::from_markdown_strict(&state_content) {
         Ok(s) => s,
-        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety".to_string()),
+        Err(_) => {
+            return HookOutput::block(
+                "Malformed state file, blocking operation for safety".to_string(),
+            );
+        }
     };
 
     let current_round = state.current_round;
 
     // Block goal-tracker after Round 0
     if is_goal_tracker && current_round > 0 {
-        let summary_file = format!("{}/round-{}-summary.md", active_loop_dir.display(), current_round);
+        let summary_file = format!(
+            "{}/round-{}-summary.md",
+            active_loop_dir.display(),
+            current_round
+        );
         return HookOutput::block(format!(
             "Writing to goal-tracker.md is not allowed after Round 0. Update it in your summary: {}",
             summary_file
@@ -373,7 +394,11 @@ fn validate_write(input: &HookInput) -> HookOutput {
 
     // Block summary files outside .humanize/rlcr/
     if is_summary && !in_humanize_loop_dir {
-        let correct_path = format!("{}/round-{}-summary.md", active_loop_dir.display(), current_round);
+        let correct_path = format!(
+            "{}/round-{}-summary.md",
+            active_loop_dir.display(),
+            current_round
+        );
         return HookOutput::block(format!(
             "Write summary to the correct path: {}",
             correct_path
@@ -384,7 +409,11 @@ fn validate_write(input: &HookInput) -> HookOutput {
     if is_summary {
         if let Some(claude_round) = humanize_core::fs::extract_round_number(&file_path) {
             if claude_round != current_round {
-                let correct_path = format!("{}/round-{}-summary.md", active_loop_dir.display(), current_round);
+                let correct_path = format!(
+                    "{}/round-{}-summary.md",
+                    active_loop_dir.display(),
+                    current_round
+                );
                 return HookOutput::block(format!(
                     "You tried to write to round-{}-summary.md but current round is {}. Write to: {}",
                     claude_round, current_round, correct_path
@@ -431,22 +460,31 @@ fn pr_loop_readonly_reason() -> String {
 
 /// Protected file patterns that should not be modified via shell commands.
 const PROTECTED_PATTERNS: &[&str] = &[
-    "state.md", "finalize-state.md", "goal-tracker.md",
-    "round-", "-summary.md", "-prompt.md", "-todos.md",
-    "-pr-comment.md", "-pr-check.md", "-pr-feedback.md", "-codex-prompt.md",
+    "state.md",
+    "finalize-state.md",
+    "goal-tracker.md",
+    "round-",
+    "-summary.md",
+    "-prompt.md",
+    "-todos.md",
+    "-pr-comment.md",
+    "-pr-check.md",
+    "-pr-feedback.md",
+    "-codex-prompt.md",
 ];
 
 /// Check if a command contains any protected file pattern.
 fn contains_protected_pattern(cmd_lower: &str) -> Option<&'static str> {
-    PROTECTED_PATTERNS.iter().find(|p| cmd_lower.contains(*p)).copied()
+    PROTECTED_PATTERNS
+        .iter()
+        .find(|p| cmd_lower.contains(*p))
+        .copied()
 }
 
 fn bash_has_control_operators(cmd_lower: &str) -> bool {
-    [
-        "|", "&&", ";", "`", "$(", "||", "<(", ">(", "\n",
-    ]
-    .iter()
-    .any(|pattern| cmd_lower.contains(pattern))
+    ["|", "&&", ";", "`", "$(", "||", "<(", ">(", "\n"]
+        .iter()
+        .any(|pattern| cmd_lower.contains(pattern))
         || cmd_lower.trim_end().ends_with('&')
 }
 
@@ -484,9 +522,26 @@ fn command_modifies_protected_file(cmd_lower: &str) -> bool {
     };
 
     let write_like_patterns = [
-        ">", ">>", "tee ", "sed -i", "perl -i", "ruby -i", "truncate ", "dd ", "install ",
-        "mv ", "cp ", "touch ", "rm ", "python -c", "python3 -c", "node -e", "ed ", "ex ",
-        "exec >", "xargs ",
+        ">",
+        ">>",
+        "tee ",
+        "sed -i",
+        "perl -i",
+        "ruby -i",
+        "truncate ",
+        "dd ",
+        "install ",
+        "mv ",
+        "cp ",
+        "touch ",
+        "rm ",
+        "python -c",
+        "python3 -c",
+        "node -e",
+        "ed ",
+        "ex ",
+        "exec >",
+        "xargs ",
     ];
 
     write_like_patterns
@@ -519,7 +574,8 @@ fn validate_edit(input: &HookInput) -> HookOutput {
     }
 
     // Block prompt files (read-only, generated by Codex)
-    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt) {
+    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Prompt)
+    {
         return HookOutput::block(render_template_or_fallback(
             "block/prompt-file-write.md",
             "# Prompt File Write Blocked\n\nYou cannot write to `round-*-prompt.md` files.",
@@ -588,7 +644,11 @@ fn validate_edit(input: &HookInput) -> HookOutput {
 
     let state = match humanize_core::state::State::from_markdown_strict(&state_content) {
         Ok(s) => s,
-        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety".to_string()),
+        Err(_) => {
+            return HookOutput::block(
+                "Malformed state file, blocking operation for safety".to_string(),
+            );
+        }
     };
 
     let current_round = state.current_round;
@@ -604,7 +664,11 @@ fn validate_edit(input: &HookInput) -> HookOutput {
 
     // Block goal-tracker after Round 0
     if path_lower.ends_with("goal-tracker.md") && current_round > 0 {
-        let summary_file = format!("{}/round-{}-summary.md", active_loop_dir.display(), current_round);
+        let summary_file = format!(
+            "{}/round-{}-summary.md",
+            active_loop_dir.display(),
+            current_round
+        );
         return HookOutput::block(format!(
             "Editing goal-tracker.md is not allowed after Round 0. Update it in your summary: {}",
             summary_file
@@ -612,10 +676,15 @@ fn validate_edit(input: &HookInput) -> HookOutput {
     }
 
     // Validate round number for summary files
-    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Summary) {
+    if humanize_core::fs::is_round_file_type(&path_lower, humanize_core::fs::RoundFileType::Summary)
+    {
         if let Some(claude_round) = humanize_core::fs::extract_round_number(&file_path) {
             if claude_round != current_round {
-                let correct_path = format!("{}/round-{}-summary.md", active_loop_dir.display(), current_round);
+                let correct_path = format!(
+                    "{}/round-{}-summary.md",
+                    active_loop_dir.display(),
+                    current_round
+                );
                 return HookOutput::block(format!(
                     "You tried to edit round-{}-summary.md but current round is {}. Edit: {}",
                     claude_round, current_round, correct_path
@@ -645,14 +714,35 @@ fn validate_bash(input: &HookInput) -> HookOutput {
 
     // Safe command patterns
     let safe_patterns = [
-        "git status", "git log", "git diff", "git branch", "git rev-parse",
-        "cargo build", "cargo check", "cargo test", "cargo clippy", "cargo fmt --check",
-        "ls ", "cat ", "head ", "tail ", "grep ", "which ", "pwd",
-        "rg ", "find ", "wc ", "sed -n", "git show", "git remote", "git ls-files",
+        "git status",
+        "git log",
+        "git diff",
+        "git branch",
+        "git rev-parse",
+        "cargo build",
+        "cargo check",
+        "cargo test",
+        "cargo clippy",
+        "cargo fmt --check",
+        "ls ",
+        "cat ",
+        "head ",
+        "tail ",
+        "grep ",
+        "which ",
+        "pwd",
+        "rg ",
+        "find ",
+        "wc ",
+        "sed -n",
+        "git show",
+        "git remote",
+        "git ls-files",
     ];
 
     for pattern in &safe_patterns {
-        if cmd_lower.starts_with(&pattern.to_lowercase()) && !bash_has_control_operators(&cmd_lower) {
+        if cmd_lower.starts_with(&pattern.to_lowercase()) && !bash_has_control_operators(&cmd_lower)
+        {
             return HookOutput::allow();
         }
     }
@@ -697,8 +787,8 @@ fn validate_bash(input: &HookInput) -> HookOutput {
 
     // Dangerous patterns
     let dangerous_patterns = [
-        "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "2>",
-        "chmod", "chown", "mkdir -p", "nohup", "disown", "bg ", "fg ",
+        "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "2>", "chmod", "chown", "mkdir -p", "nohup",
+        "disown", "bg ", "fg ",
     ];
 
     for pattern in &dangerous_patterns {
@@ -722,15 +812,19 @@ fn validate_bash(input: &HookInput) -> HookOutput {
 
 /// Validate plan file path.
 fn validate_plan_file(input: &HookInput) -> HookOutput {
-    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
-        .ok()
-        .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()));
+    let project_root = std::env::var("CLAUDE_PROJECT_DIR").ok().or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    });
 
     let project_root = match project_root {
         Some(p) => p,
-        None => return HookOutput::block(
-            "Could not determine project root. Please set CLAUDE_PROJECT_DIR and try again.",
-        ),
+        None => {
+            return HookOutput::block(
+                "Could not determine project root. Please set CLAUDE_PROJECT_DIR and try again.",
+            );
+        }
     };
 
     let loop_base_dir = Path::new(&project_root).join(".humanize/rlcr");
@@ -747,16 +841,12 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
 
     let state_content = match std::fs::read_to_string(&state_file) {
         Ok(c) => c,
-        Err(_) => {
-            return HookOutput::block("Malformed state file, blocking operation for safety")
-        }
+        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety"),
     };
 
     let state = match humanize_core::state::State::from_markdown_strict(&state_content) {
         Ok(s) => s,
-        Err(_) => {
-            return HookOutput::block("Malformed state file, blocking operation for safety")
-        }
+        Err(_) => return HookOutput::block("Malformed state file, blocking operation for safety"),
     };
 
     if let Some(reason) = validate_plan_state_schema(&state_content) {
@@ -768,7 +858,7 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
         Err(_) => {
             return HookOutput::block(
                 "Git operation failed or timed out.\n\nCannot verify branch consistency. Please check git status and try again.",
-            )
+            );
         }
     };
 
@@ -785,13 +875,13 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
             return HookOutput::block(format!(
                 "Git operation failed while checking plan file tracking status (exit code: {}).\n\nPlease check git status and try again.",
                 code
-            ))
+            ));
         }
         Err(GitPathCheckError::Io(err)) => {
             return HookOutput::block(format!(
                 "Git operation failed while checking plan file tracking status.\n\n{}\n\nPlease check git status and try again.",
                 err
-            ))
+            ));
         }
     };
 
@@ -803,19 +893,22 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
             ));
         }
 
-        let plan_git_status = match git_path_status_porcelain(Path::new(&project_root), &state.plan_file) {
+        let plan_git_status = match git_path_status_porcelain(
+            Path::new(&project_root),
+            &state.plan_file,
+        ) {
             Ok(status) => status,
             Err(GitPathCheckError::Failed(code)) => {
                 return HookOutput::block(format!(
                     "Git operation failed while checking plan file status (exit code: {}).\n\nPlease check git status and try again.",
                     code
-                ))
+                ));
             }
             Err(GitPathCheckError::Io(err)) => {
                 return HookOutput::block(format!(
                     "Git operation failed while checking plan file status.\n\n{}\n\nPlease check git status and try again.",
                     err
-                ))
+                ));
             }
         };
 
@@ -839,9 +932,7 @@ fn validate_plan_file(input: &HookInput) -> HookOutput {
 fn validate_plan_state_schema(state_content: &str) -> Option<String> {
     let mapping = match extract_state_yaml_mapping(state_content) {
         Ok(m) => m,
-        Err(_) => {
-            return Some("Malformed state file, blocking operation for safety".to_string())
-        }
+        Err(_) => return Some("Malformed state file, blocking operation for safety".to_string()),
     };
 
     if !mapping.contains_key(serde_yaml::Value::String("plan_tracked".to_string())) {
@@ -889,9 +980,7 @@ fn git_current_branch(repo_path: &Path) -> std::result::Result<String, GitPathCh
         .map_err(GitPathCheckError::Io)?;
 
     if !output.status.success() {
-        return Err(GitPathCheckError::Failed(
-            output.status.code().unwrap_or(1),
-        ));
+        return Err(GitPathCheckError::Failed(output.status.code().unwrap_or(1)));
     }
 
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -902,7 +991,10 @@ fn git_current_branch(repo_path: &Path) -> std::result::Result<String, GitPathCh
     Ok(branch)
 }
 
-fn git_path_is_tracked(repo_path: &Path, path: &str) -> std::result::Result<bool, GitPathCheckError> {
+fn git_path_is_tracked(
+    repo_path: &Path,
+    path: &str,
+) -> std::result::Result<bool, GitPathCheckError> {
     let output = Command::new("git")
         .args(["-C", repo_path.to_str().unwrap_or(".")])
         .args(["ls-files", "--error-unmatch", path])
@@ -927,9 +1019,7 @@ fn git_path_status_porcelain(
         .map_err(GitPathCheckError::Io)?;
 
     if !output.status.success() {
-        return Err(GitPathCheckError::Failed(
-            output.status.code().unwrap_or(1),
-        ));
+        return Err(GitPathCheckError::Failed(output.status.code().unwrap_or(1)));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -964,7 +1054,9 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let project_root = resolve_project_root()?;
 
     let chosen_plan = match (&options.positional_plan_file, &options.explicit_plan_file) {
-        (Some(_), Some(_)) => bail!("Error: cannot specify both positional plan file and --plan-file"),
+        (Some(_), Some(_)) => {
+            bail!("Error: cannot specify both positional plan file and --plan-file")
+        }
         (Some(path), None) => Some(path.clone()),
         (None, Some(path)) => Some(path.clone()),
         (None, None) if options.skip_impl => None,
@@ -979,8 +1071,8 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
         );
     }
 
-    let start_branch =
-        humanize_core::git::get_current_branch(&project_root).context("Error: failed to get current branch")?;
+    let start_branch = humanize_core::git::get_current_branch(&project_root)
+        .context("Error: failed to get current branch")?;
 
     let (codex_model, codex_effort) = parse_model_and_effort(
         &options.codex_model,
@@ -997,7 +1089,8 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let mut line_count = 0usize;
 
     let state_plan_file = if let Some(plan_file) = chosen_plan.clone() {
-        let validation = validate_setup_plan_file(&project_root, &plan_file, options.track_plan_file)?;
+        let validation =
+            validate_setup_plan_file(&project_root, &plan_file, options.track_plan_file)?;
         line_count = validation.line_count;
         create_plan_backup(&validation.full_path, &loop_dir.join("plan.md"))?;
         plan_file
@@ -1012,7 +1105,11 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
 
     let state = humanize_core::state::State::new_rlcr(
         state_plan_file.clone(),
-        if skip_impl_no_plan { false } else { options.track_plan_file },
+        if skip_impl_no_plan {
+            false
+        } else {
+            options.track_plan_file
+        },
         start_branch.clone(),
         base_branch.clone(),
         base_commit.clone(),
@@ -1040,7 +1137,10 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     )?;
 
     if options.skip_impl {
-        fs::write(loop_dir.join(".review-phase-started"), "build_finish_round=0\n")?;
+        fs::write(
+            loop_dir.join(".review-phase-started"),
+            "build_finish_round=0\n",
+        )?;
     }
 
     let goal_tracker_path = loop_dir.join("goal-tracker.md");
@@ -1051,11 +1151,7 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
         fs::write(&goal_tracker_path, skip_impl_goal_tracker())?;
         fs::write(
             &prompt_path,
-            skip_impl_round_prompt(
-                &summary_path,
-                &base_branch,
-                &start_branch,
-            ),
+            skip_impl_round_prompt(&summary_path, &base_branch, &start_branch),
         )?;
     } else {
         let plan_full_path = project_root.join(&state_plan_file);
@@ -1101,19 +1197,23 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
     }
 
     let project_root = resolve_project_root()?;
-    if humanize_core::state::find_active_loop(&project_root.join(".humanize/rlcr"), None).is_some() {
+    if humanize_core::state::find_active_loop(&project_root.join(".humanize/rlcr"), None).is_some()
+    {
         bail!("Error: An RLCR loop is already active");
     }
     if newest_active_pr_loop(&project_root.join(".humanize/pr-loop")).is_some() {
         bail!("Error: A PR loop is already active");
     }
 
-    ensure_command_exists("gh", "Error: start-pr-loop requires the GitHub CLI (gh) to be installed")?;
+    ensure_command_exists(
+        "gh",
+        "Error: start-pr-loop requires the GitHub CLI (gh) to be installed",
+    )?;
     ensure_command_exists("codex", "Error: start-pr-loop requires codex to run")?;
     ensure_gh_auth(&project_root)?;
 
-    let start_branch =
-        humanize_core::git::get_current_branch(&project_root).context("Error: Failed to get current branch")?;
+    let start_branch = humanize_core::git::get_current_branch(&project_root)
+        .context("Error: Failed to get current branch")?;
     let current_repo = gh_current_repo(&project_root)?;
     let pr_number = gh_detect_pr_number(&project_root)?;
     let pr_state = gh_pr_state(&project_root, pr_number)?;
@@ -1126,7 +1226,13 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
 
     let commit_info = gh_pr_commit_info(&project_root, pr_number)?;
     let active_bots = build_active_bots(&options);
-    let startup = gh_startup_case(&project_root, &current_repo, pr_number, &active_bots, &commit_info.latest_commit_at)?;
+    let startup = gh_startup_case(
+        &project_root,
+        &current_repo,
+        pr_number,
+        &active_bots,
+        &commit_info.latest_commit_at,
+    )?;
 
     let loop_base_dir = project_root.join(".humanize/pr-loop");
     fs::create_dir_all(&loop_base_dir)?;
@@ -1147,7 +1253,15 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
             mention
         );
         let comment_status = Command::new("gh")
-            .args(["pr", "comment", &pr_number.to_string(), "--repo", &current_repo, "--body", &body])
+            .args([
+                "pr",
+                "comment",
+                &pr_number.to_string(),
+                "--repo",
+                &current_repo,
+                "--body",
+                &body,
+            ])
             .current_dir(&project_root)
             .status()?;
         if !comment_status.success() {
@@ -1170,10 +1284,7 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
         }
     }
 
-    let (codex_model, codex_effort) = parse_model_and_effort(
-        &options.codex_model,
-        "medium",
-    );
+    let (codex_model, codex_effort) = parse_model_and_effort(&options.codex_model, "medium");
 
     let state = humanize_core::state::State {
         current_round: 0,
@@ -1267,7 +1378,9 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
         println!("max_iterations: {}", state.max_iterations);
         println!();
         println!("The loop is currently in Finalize Phase.");
-        println!("After this phase completes, the loop will end without returning to Codex review.");
+        println!(
+            "After this phase completes, the loop will end without returning to Codex review."
+        );
         println!();
         println!("Use --force to cancel anyway.");
         std::process::exit(2);
@@ -1354,7 +1467,10 @@ fn ask_codex_native(prompt: &str, model: &str, effort: &str, timeout: u64) -> Re
         ),
     )?;
 
-    eprintln!("ask-codex: model={} effort={} timeout={}s", model, effort, timeout);
+    eprintln!(
+        "ask-codex: model={} effort={} timeout={}s",
+        model, effort, timeout
+    );
     eprintln!("ask-codex: cache={}", cache_dir.display());
     eprintln!("ask-codex: running codex exec...");
 
@@ -1459,7 +1575,10 @@ fn gen_plan_native(input: &str, output: &str) -> Result<()> {
         );
     }
     if !relevance.starts_with("RELEVANT:") {
-        bail!("gen-plan relevance check returned invalid output: {}", relevance);
+        bail!(
+            "gen-plan relevance check returned invalid output: {}",
+            relevance
+        );
     }
 
     let analysis = run_gen_plan_analysis(&draft, &repo_context, &options)?;
@@ -1694,7 +1813,11 @@ fn build_gen_plan_generation_prompt(
     let notes_block = if notes.is_empty() {
         "None.".to_string()
     } else {
-        notes.iter().map(|note| format!("- {}", note)).collect::<Vec<_>>().join("\n")
+        notes
+            .iter()
+            .map(|note| format!("- {}", note))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     format!(
@@ -1709,11 +1832,13 @@ fn build_gen_plan_generation_prompt(
 }
 
 fn contains_cjk(text: &str) -> bool {
-    text.chars().any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch))
+    text.chars()
+        .any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch))
 }
 
 fn should_offer_language_unification(analysis: &GenPlanAnalysis, content: &str) -> bool {
-    analysis.mixed_languages || (contains_cjk(content) && content.chars().any(|ch| ch.is_ascii_alphabetic()))
+    analysis.mixed_languages
+        || (contains_cjk(content) && content.chars().any(|ch| ch.is_ascii_alphabetic()))
 }
 
 fn prompt_language_unification() -> Result<Option<String>> {
@@ -1938,7 +2063,10 @@ fn handle_stop_rlcr() -> Result<()> {
     }
 
     if let Some(reason) = goal_tracker_placeholder_reason(&loop_dir) {
-        return emit_stop_block(&reason, Some("Loop: Blocked - goal tracker placeholders remain"));
+        return emit_stop_block(
+            &reason,
+            Some("Loop: Blocked - goal tracker placeholders remain"),
+        );
     }
 
     if let Some(reason) = transcript_todo_block_reason(input.transcript_path.as_deref())? {
@@ -1949,7 +2077,13 @@ fn handle_stop_rlcr() -> Result<()> {
         return run_review_phase(&project_root, &loop_dir, &state_file, &mut state);
     }
 
-    run_impl_phase(&project_root, &loop_dir, &state_file, &mut state, &summary_file)
+    run_impl_phase(
+        &project_root,
+        &loop_dir,
+        &state_file,
+        &mut state,
+        &summary_file,
+    )
 }
 
 fn run_impl_phase(
@@ -1976,11 +2110,12 @@ fn run_impl_phase(
             return emit_stop_block(
                 &format!("Codex review failed.\n\n{}\n\nPlease retry the exit.", err),
                 Some("Loop: Blocked - codex exec failed"),
-            )
+            );
         }
     };
 
-    let review_result_file = loop_dir.join(format!("round-{}-review-result.md", state.current_round));
+    let review_result_file =
+        loop_dir.join(format!("round-{}-review-result.md", state.current_round));
     fs::write(&review_result_file, &result.stdout)?;
     fs::write(
         cache_dir.join(format!("round-{}-codex-exec.log", state.current_round)),
@@ -2075,7 +2210,10 @@ fn run_review_phase(
             state.review_started = true;
             state.save(state_file)?;
             return emit_stop_block(
-                &format!("The `codex review` command failed: {}. Please retry the exit.", err),
+                &format!(
+                    "The `codex review` command failed: {}. Please retry the exit.",
+                    err
+                ),
                 Some("Loop: Blocked - codex review failed"),
             );
         }
@@ -2090,7 +2228,10 @@ fn run_review_phase(
         let next_summary_file = loop_dir.join(format!("round-{}-summary.md", review_round));
         let review_fix_prompt = build_review_phase_fix_prompt(&combined_output, &next_summary_file);
         fs::write(&next_prompt_file, &review_fix_prompt)?;
-        return emit_stop_block(&review_fix_prompt, Some("Loop: Blocked - review issues found"));
+        return emit_stop_block(
+            &review_fix_prompt,
+            Some("Loop: Blocked - review issues found"),
+        );
     }
 
     fs::rename(state_file, loop_dir.join("finalize-state.md"))?;
@@ -2102,10 +2243,7 @@ fn run_review_phase(
         )?;
     }
     let finalize_prompt = build_finalize_phase_prompt(state, loop_dir, &finalize_summary_file);
-    emit_stop_block(
-        &finalize_prompt,
-        Some("Loop: Blocked - finalize phase"),
-    )
+    emit_stop_block(&finalize_prompt, Some("Loop: Blocked - finalize phase"))
 }
 
 fn combine_review_output(stdout: &str, stderr: &str) -> String {
@@ -2129,7 +2267,10 @@ fn stop_hook_plan_integrity_check(
 
     let full_plan = project_root.join(&state.plan_file);
     if !full_plan.exists() {
-        return Some(format!("Project plan file has been deleted.\n\nOriginal: {}", state.plan_file));
+        return Some(format!(
+            "Project plan file has been deleted.\n\nOriginal: {}",
+            state.plan_file
+        ));
     }
 
     if state.plan_tracked {
@@ -2362,7 +2503,14 @@ fn ensure_gh_auth(project_root: &Path) -> Result<()> {
 
 fn gh_current_repo(project_root: &Path) -> Result<String> {
     let output = Command::new("gh")
-        .args(["repo", "view", "--json", "owner,name", "-q", ".owner.login + \"/\" + .name"])
+        .args([
+            "repo",
+            "view",
+            "--json",
+            "owner,name",
+            "-q",
+            ".owner.login + \"/\" + .name",
+        ])
         .current_dir(project_root)
         .output()?;
     if !output.status.success() {
@@ -2403,7 +2551,15 @@ fn gh_detect_pr_number(project_root: &Path) -> Result<u32> {
 
 fn gh_pr_state(project_root: &Path, pr_number: u32) -> Result<String> {
     let output = Command::new("gh")
-        .args(["pr", "view", &pr_number.to_string(), "--json", "state", "-q", ".state"])
+        .args([
+            "pr",
+            "view",
+            &pr_number.to_string(),
+            "--json",
+            "state",
+            "-q",
+            ".state",
+        ])
         .current_dir(project_root)
         .output()?;
     if !output.status.success() {
@@ -2489,7 +2645,11 @@ fn gh_fetch_comments(project_root: &Path, repo: &str, pr_number: u32) -> Result<
     Ok(comments)
 }
 
-fn gh_fetch_comment_source(project_root: &Path, endpoint: &str, source: &'static str) -> Result<Vec<PrComment>> {
+fn gh_fetch_comment_source(
+    project_root: &Path,
+    endpoint: &str,
+    source: &'static str,
+) -> Result<Vec<PrComment>> {
     let output = Command::new("gh")
         .args(["api", endpoint])
         .current_dir(project_root)
@@ -2631,7 +2791,10 @@ fn gh_find_latest_user_comment(
     user: &str,
 ) -> Result<Option<(u64, String)>> {
     let output = Command::new("gh")
-        .args(["api", &format!("repos/{}/issues/{}/comments", repo, pr_number)])
+        .args([
+            "api",
+            &format!("repos/{}/issues/{}/comments", repo, pr_number),
+        ])
         .current_dir(project_root)
         .output()?;
     if !output.status.success() {
@@ -2641,7 +2804,8 @@ fn gh_find_latest_user_comment(
     let latest = values
         .into_iter()
         .filter(|value| {
-            value.get("user")
+            value
+                .get("user")
                 .and_then(|v| v.get("login"))
                 .and_then(|v| v.as_str())
                 == Some(user)
@@ -2775,7 +2939,10 @@ fn git_changed_paths(status: &str) -> Vec<String> {
         .collect()
 }
 
-fn detect_large_changed_files(project_root: &Path, status: &str) -> Vec<(String, usize, &'static str)> {
+fn detect_large_changed_files(
+    project_root: &Path,
+    status: &str,
+) -> Vec<(String, usize, &'static str)> {
     let mut seen = HashSet::new();
     let mut large_files = Vec::new();
     for relative in git_changed_paths(status) {
@@ -2851,14 +3018,18 @@ fn rlcr_goal_tracker_update_section(loop_dir: &Path) -> String {
 }
 
 fn is_full_alignment_round(current_round: u32, full_review_round: u32) -> bool {
-    let normalized = if full_review_round < 2 { 5 } else { full_review_round };
+    let normalized = if full_review_round < 2 {
+        5
+    } else {
+        full_review_round
+    };
     current_round % normalized == normalized - 1
 }
 
 fn detect_open_question(review_content: &str) -> bool {
-    review_content.lines().any(|line| {
-        line.len() < 40 && line.contains("Open Question")
-    })
+    review_content
+        .lines()
+        .any(|line| line.len() < 40 && line.contains("Open Question"))
 }
 
 fn build_impl_review_prompt(
@@ -3012,10 +3183,7 @@ fn build_review_phase_fix_prompt(review_content: &str, summary_file: &Path) -> S
     )
 }
 
-fn build_review_phase_audit_prompt(
-    review_round: u32,
-    base_branch: &str,
-) -> String {
+fn build_review_phase_audit_prompt(review_round: u32, base_branch: &str) -> String {
     render_template_or_fallback(
         "codex/code-review-phase.md",
         "# Code Review Phase - Round {{REVIEW_ROUND}}\n\nBase: {{BASE_BRANCH}}",
@@ -3065,7 +3233,10 @@ fn parse_json_value_stream(bytes: &[u8]) -> Result<Vec<serde_json::Value>> {
 }
 
 fn gh_output(project_root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Ok(Command::new("gh").args(args).current_dir(project_root).output()?)
+    Ok(Command::new("gh")
+        .args(args)
+        .current_dir(project_root)
+        .output()?)
 }
 
 fn gh_api_values(project_root: &Path, endpoint: &str) -> Result<Vec<serde_json::Value>> {
@@ -3091,7 +3262,10 @@ fn gh_current_repo_json(project_root: &Path) -> Result<String> {
         .and_then(|v| v.get("login"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let name = value.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if owner.is_empty() || name.is_empty() {
         bail!("Error: Failed to parse current repository");
     }
@@ -3110,7 +3284,10 @@ fn gh_parent_repo(project_root: &Path) -> Result<Option<String>> {
         .and_then(|v| v.get("login"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let name = parent.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+    let name = parent
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if owner.is_empty() || name.is_empty() {
         Ok(None)
     } else {
@@ -3121,7 +3298,15 @@ fn gh_parent_repo(project_root: &Path) -> Result<Option<String>> {
 fn gh_repo_contains_pr(project_root: &Path, repo: &str, pr_number: u32) -> bool {
     gh_output(
         project_root,
-        &["pr", "view", &pr_number.to_string(), "--repo", repo, "--json", "number"],
+        &[
+            "pr",
+            "view",
+            &pr_number.to_string(),
+            "--repo",
+            repo,
+            "--json",
+            "number",
+        ],
     )
     .map(|output| output.status.success())
     .unwrap_or(false)
@@ -3166,7 +3351,11 @@ fn gh_pr_state_in_repo(project_root: &Path, repo: &str, pr_number: u32) -> Resul
         .to_string())
 }
 
-fn gh_pr_commit_info_in_repo(project_root: &Path, repo: &str, pr_number: u32) -> Result<PrCommitInfo> {
+fn gh_pr_commit_info_in_repo(
+    project_root: &Path,
+    repo: &str,
+    pr_number: u32,
+) -> Result<PrCommitInfo> {
     let output = gh_output(
         project_root,
         &[
@@ -3187,7 +3376,8 @@ fn gh_pr_commit_info_in_repo(project_root: &Path, repo: &str, pr_number: u32) ->
         .get("commits")
         .and_then(|v| v.as_array())
         .and_then(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(|item| item.get("committedDate").and_then(|v| v.as_str()))
                 .max()
         })
@@ -3267,11 +3457,14 @@ fn gh_detect_trigger_comment(
         if author != current_user {
             continue;
         }
-        let body = value.get("body").and_then(|v| v.as_str()).unwrap_or_default();
-        if !configured_bots
-            .iter()
-            .any(|bot| body.to_lowercase().contains(&format!("@{}", bot.to_lowercase())))
-        {
+        let body = value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if !configured_bots.iter().any(|bot| {
+            body.to_lowercase()
+                .contains(&format!("@{}", bot.to_lowercase()))
+        }) {
             continue;
         }
         let created_at = value
@@ -3299,7 +3492,11 @@ fn gh_detect_trigger_comment(
     Ok(latest)
 }
 
-fn gh_issue_reactions(project_root: &Path, repo: &str, issue_number: u32) -> Result<Vec<PrReaction>> {
+fn gh_issue_reactions(
+    project_root: &Path,
+    repo: &str,
+    issue_number: u32,
+) -> Result<Vec<PrReaction>> {
     let values = gh_api_values(
         project_root,
         &format!("repos/{}/issues/{}/reactions", repo, issue_number),
@@ -3316,7 +3513,11 @@ fn gh_issue_reactions(project_root: &Path, repo: &str, issue_number: u32) -> Res
         .collect())
 }
 
-fn gh_comment_reactions(project_root: &Path, repo: &str, comment_id: &str) -> Result<Vec<PrReaction>> {
+fn gh_comment_reactions(
+    project_root: &Path,
+    repo: &str,
+    comment_id: &str,
+) -> Result<Vec<PrReaction>> {
     let values = gh_api_values(
         project_root,
         &format!("repos/{}/issues/comments/{}/reactions", repo, comment_id),
@@ -3365,9 +3566,10 @@ fn gh_wait_for_claude_eyes(
             sleep(delay);
         }
         if let Ok(reactions) = gh_comment_reactions(project_root, repo, comment_id) {
-            if let Some(reaction) = reactions.into_iter().find(|reaction| {
-                reaction.user == "claude[bot]" && reaction.content == "eyes"
-            }) {
+            if let Some(reaction) = reactions
+                .into_iter()
+                .find(|reaction| reaction.user == "claude[bot]" && reaction.content == "eyes")
+            {
                 return Ok(Some(reaction));
             }
         }
@@ -3375,7 +3577,11 @@ fn gh_wait_for_claude_eyes(
     Ok(None)
 }
 
-fn gh_fetch_review_events(project_root: &Path, repo: &str, pr_number: u32) -> Result<Vec<PrReviewEvent>> {
+fn gh_fetch_review_events(
+    project_root: &Path,
+    repo: &str,
+    pr_number: u32,
+) -> Result<Vec<PrReviewEvent>> {
     let issue_values = gh_api_values(
         project_root,
         &format!("repos/{}/issues/{}/comments", repo, pr_number),
@@ -3447,7 +3653,10 @@ fn gh_fetch_review_events(project_root: &Path, repo: &str, pr_number: u32) -> Re
                 .unwrap_or_default()
                 .to_string(),
             state: None,
-            path: value.get("path").and_then(|v| v.as_str()).map(ToString::to_string),
+            path: value
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
             line: value
                 .get("line")
                 .or_else(|| value.get("original_line"))
@@ -3463,7 +3672,10 @@ fn gh_fetch_review_events(project_root: &Path, repo: &str, pr_number: u32) -> Re
             .get("state")
             .and_then(|v| v.as_str())
             .map(ToString::to_string);
-        let body = value.get("body").and_then(|v| v.as_str()).unwrap_or_default();
+        let body = value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         let review_body = if body.is_empty() {
             format!("[Review state: {}]", state.as_deref().unwrap_or("UNKNOWN"))
         } else {
@@ -3505,7 +3717,9 @@ fn filter_review_events(
         .collect::<HashSet<_>>();
     events
         .into_iter()
-        .filter(|event| event.created_at.as_str() >= after_timestamp && authors.contains(&event.author))
+        .filter(|event| {
+            event.created_at.as_str() >= after_timestamp && authors.contains(&event.author)
+        })
         .collect()
 }
 
@@ -3537,7 +3751,10 @@ fn format_pr_review_comments_markdown(
 
         for comment in bot_comments {
             out.push_str("### Comment\n\n");
-            out.push_str(&format!("- **Type**: {}\n", comment.source.replace('_', " ")));
+            out.push_str(&format!(
+                "- **Type**: {}\n",
+                comment.source.replace('_', " ")
+            ));
             out.push_str(&format!("- **Time**: {}\n", comment.created_at));
             if let Some(path) = &comment.path {
                 if let Some(line) = comment.line {
@@ -3629,7 +3846,11 @@ fn count_pr_issues_found(check_content: &str) -> u32 {
     count
 }
 
-fn update_pr_goal_tracker(goal_tracker_path: &Path, round: u32, bot_results: Option<(&str, u32, u32)>) -> Result<()> {
+fn update_pr_goal_tracker(
+    goal_tracker_path: &Path,
+    round: u32,
+    bot_results: Option<(&str, u32, u32)>,
+) -> Result<()> {
     if !goal_tracker_path.exists() {
         return Ok(());
     }
@@ -3655,7 +3876,11 @@ fn update_pr_goal_tracker(goal_tracker_path: &Path, round: u32, bot_results: Opt
         .find_map(|line| line.strip_prefix("- Total Issues Resolved: "))
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(0);
-    let total_found = if has_summary_row { current_found } else { current_found + new_issues };
+    let total_found = if has_summary_row {
+        current_found
+    } else {
+        current_found + new_issues
+    };
     let total_resolved = if has_summary_row {
         current_resolved
     } else {
@@ -3673,17 +3898,18 @@ fn update_pr_goal_tracker(goal_tracker_path: &Path, round: u32, bot_results: Opt
     let mut updated = if has_summary_row {
         original.clone()
     } else {
-        original
-            .replace(
-                &format!(
-                    "- Total Issues Found: {}\n- Total Issues Resolved: {}\n- Remaining: {}",
-                    current_found, current_resolved, current_found.saturating_sub(current_resolved)
-                ),
-                &format!(
-                    "- Total Issues Found: {}\n- Total Issues Resolved: {}\n- Remaining: {}",
-                    total_found, total_resolved, remaining
-                ),
-            )
+        original.replace(
+            &format!(
+                "- Total Issues Found: {}\n- Total Issues Resolved: {}\n- Remaining: {}",
+                current_found,
+                current_resolved,
+                current_found.saturating_sub(current_resolved)
+            ),
+            &format!(
+                "- Total Issues Found: {}\n- Total Issues Resolved: {}\n- Remaining: {}",
+                total_found, total_resolved, remaining
+            ),
+        )
     };
 
     if !has_summary_row {
@@ -3726,7 +3952,9 @@ fn build_pr_feedback_markdown(
         check_content.trim(),
         pr_number,
         bot_mentions,
-        loop_dir.join(format!("round-{}-pr-resolve.md", next_round)).display(),
+        loop_dir
+            .join(format!("round-{}-pr-resolve.md", next_round))
+            .display(),
         active_bots.join(", "),
         next_round,
         max_iterations
@@ -3752,7 +3980,9 @@ fn git_stdout(project_root: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn git_stdout_optional(project_root: &Path, args: &[&str]) -> Option<String> {
-    git_stdout(project_root, args).ok().filter(|value| !value.is_empty())
+    git_stdout(project_root, args)
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 fn pr_ahead_count(project_root: &Path, repo: &str, pr_number: u32) -> Result<u32> {
@@ -3768,7 +3998,8 @@ fn pr_ahead_count(project_root: &Path, repo: &str, pr_number: u32) -> Result<u32
         }
     }
 
-    let current_branch = git_current_branch(project_root).map_err(|_| anyhow::anyhow!("git branch lookup failed"))?;
+    let current_branch = git_current_branch(project_root)
+        .map_err(|_| anyhow::anyhow!("git branch lookup failed"))?;
     let local_head = git_stdout_optional(project_root, &["rev-parse", "HEAD"]).unwrap_or_default();
 
     if git_stdout(project_root, &["rev-parse", "--abbrev-ref", "@{u}"]).is_err() {
@@ -3776,17 +4007,26 @@ fn pr_ahead_count(project_root: &Path, repo: &str, pr_number: u32) -> Result<u32
         let remote_head = git_stdout_optional(project_root, &["rev-parse", &remote_ref]);
         if let Some(remote_head) = remote_head {
             if !local_head.is_empty() && local_head != remote_head {
-                let count = git_stdout_optional(project_root, &["rev-list", "--count", &format!("{}..HEAD", remote_ref)])
-                    .and_then(|value| value.parse::<u32>().ok())
-                    .unwrap_or(0);
+                let count = git_stdout_optional(
+                    project_root,
+                    &["rev-list", "--count", &format!("{}..HEAD", remote_ref)],
+                )
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
                 return Ok(count);
             }
         } else {
             let commit_info = gh_pr_commit_info_in_repo(project_root, repo, pr_number)?;
-            if !commit_info.latest_commit_sha.is_empty() && local_head != commit_info.latest_commit_sha {
+            if !commit_info.latest_commit_sha.is_empty()
+                && local_head != commit_info.latest_commit_sha
+            {
                 let count = git_stdout_optional(
                     project_root,
-                    &["rev-list", "--count", &format!("{}..HEAD", commit_info.latest_commit_sha)],
+                    &[
+                        "rev-list",
+                        "--count",
+                        &format!("{}..HEAD", commit_info.latest_commit_sha),
+                    ],
                 )
                 .and_then(|value| value.parse::<u32>().ok())
                 .unwrap_or(1);
@@ -3796,9 +4036,11 @@ fn pr_ahead_count(project_root: &Path, repo: &str, pr_number: u32) -> Result<u32
         return Ok(0);
     }
 
-    Ok(git_stdout_optional(project_root, &["rev-list", "--count", "@{u}..HEAD"])
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(0))
+    Ok(
+        git_stdout_optional(project_root, &["rev-list", "--count", "@{u}..HEAD"])
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0),
+    )
 }
 
 fn pr_poll_reviews(
@@ -3864,7 +4106,9 @@ fn pr_poll_reviews(
                 .is_empty()
                 .then_some(state_started_at.unwrap_or(""))
                 .unwrap_or(after_timestamp);
-            if gh_find_codex_thumbsup(project_root, repo, pr_number, Some(reaction_after))?.is_some() {
+            if gh_find_codex_thumbsup(project_root, repo, pr_number, Some(reaction_after))?
+                .is_some()
+            {
                 responded_bots.insert("codex".to_string());
                 active_bots.retain(|bot| bot != "codex");
             }
@@ -3918,9 +4162,8 @@ fn run_pr_codex_review(
     options.effort = state.codex_effort.clone();
     options.timeout_secs = state.codex_timeout;
 
-    let result = humanize_core::codex::run_exec(&prompt, &options).map_err(|err| {
-        anyhow::anyhow!("Codex failed to validate bot reviews: {}", err)
-    })?;
+    let result = humanize_core::codex::run_exec(&prompt, &options)
+        .map_err(|err| anyhow::anyhow!("Codex failed to validate bot reviews: {}", err))?;
     fs::write(check_file, &result.stdout)?;
     Ok(result.stdout)
 }
@@ -3944,8 +4187,9 @@ fn handle_stop_pr() -> Result<()> {
 
     let state_content = fs::read_to_string(&state_file)
         .context("Malformed PR loop state file, blocking operation for safety")?;
-    let mut state = humanize_core::state::State::from_markdown(&state_content)
-        .map_err(|_| anyhow::anyhow!("Malformed PR loop state file, blocking operation for safety"))?;
+    let mut state = humanize_core::state::State::from_markdown(&state_content).map_err(|_| {
+        anyhow::anyhow!("Malformed PR loop state file, blocking operation for safety")
+    })?;
 
     let pr_number = state
         .pr_number
@@ -3995,7 +4239,9 @@ fn handle_stop_pr() -> Result<()> {
     }
 
     let git_status = git_stdout(&project_root, &["status", "--porcelain"]).map_err(|_| {
-        anyhow::anyhow!("Git status operation failed. Please check your repository state and try again.")
+        anyhow::anyhow!(
+            "Git status operation failed. Please check your repository state and try again."
+        )
     })?;
     let large_files = detect_large_changed_files(&project_root, &git_status);
     if !large_files.is_empty() {
@@ -4020,7 +4266,8 @@ fn handle_stop_pr() -> Result<()> {
 
     let ahead_count = pr_ahead_count(&project_root, &pr_repo, pr_number)?;
     if ahead_count > 0 {
-        let current_branch = git_current_branch(&project_root).unwrap_or_else(|_| "main".to_string());
+        let current_branch =
+            git_current_branch(&project_root).unwrap_or_else(|_| "main".to_string());
         let reason = render_template_or_fallback(
             "block/unpushed-commits.md",
             "# Unpushed Commits Detected\n\nYou have {{AHEAD_COUNT}} unpushed commit(s). PR loop requires pushing changes so bots can review them.\n\nPlease push: git push origin {{CURRENT_BRANCH}}",
@@ -4037,7 +4284,8 @@ fn handle_stop_pr() -> Result<()> {
     if let Some(previous_sha) = state.latest_commit_sha.clone() {
         if !previous_sha.is_empty()
             && previous_sha != current_head
-            && !humanize_core::git::is_ancestor(&project_root, &previous_sha, &current_head).unwrap_or(false)
+            && !humanize_core::git::is_ancestor(&project_root, &previous_sha, &current_head)
+                .unwrap_or(false)
         {
             let commit_info = gh_pr_commit_info_in_repo(&project_root, &pr_repo, pr_number)
                 .unwrap_or(PrCommitInfo {
@@ -4056,7 +4304,10 @@ fn handle_stop_pr() -> Result<()> {
                 &[
                     ("OLD_COMMIT", previous_sha),
                     ("NEW_COMMIT", current_head.clone()),
-                    ("BOT_MENTION_STRING", build_bot_mention_string(&configured_bots)),
+                    (
+                        "BOT_MENTION_STRING",
+                        build_bot_mention_string(&configured_bots),
+                    ),
                     ("PR_NUMBER", pr_number.to_string()),
                 ],
             );
@@ -4118,8 +4369,12 @@ fn handle_stop_pr() -> Result<()> {
         }
     }
 
-    let startup_case = state.startup_case.clone().unwrap_or_else(|| "1".to_string());
-    let require_trigger = pr_requires_trigger(state.current_round, &startup_case, new_commits_detected);
+    let startup_case = state
+        .startup_case
+        .clone()
+        .unwrap_or_else(|| "1".to_string());
+    let require_trigger =
+        pr_requires_trigger(state.current_round, &startup_case, new_commits_detected);
 
     if active_bots.iter().any(|bot| bot == "codex") {
         let reaction_after = state
@@ -4127,7 +4382,8 @@ fn handle_stop_pr() -> Result<()> {
             .as_deref()
             .or(state.started_at.as_deref());
         if !(require_trigger && state.last_trigger_at.is_none()) {
-            if gh_find_codex_thumbsup(&project_root, &pr_repo, pr_number, reaction_after)?.is_some() {
+            if gh_find_codex_thumbsup(&project_root, &pr_repo, pr_number, reaction_after)?.is_some()
+            {
                 active_bots.retain(|bot| bot != "codex");
                 state.active_bots = Some(active_bots.clone());
                 state.save(&state_file)?;
@@ -4152,7 +4408,10 @@ fn handle_stop_pr() -> Result<()> {
                 ("STARTUP_CASE", startup_case.clone()),
                 ("STARTUP_CASE_DESC", startup_case_desc.to_string()),
                 ("CURRENT_ROUND", state.current_round.to_string()),
-                ("BOT_MENTION_STRING", build_bot_mention_string(&configured_bots)),
+                (
+                    "BOT_MENTION_STRING",
+                    build_bot_mention_string(&configured_bots),
+                ),
                 ("PR_NUMBER", pr_number.to_string()),
             ],
         );
@@ -4397,15 +4656,37 @@ fn validate_setup_plan_file(
     track_plan_file: bool,
 ) -> Result<ValidatedPlan> {
     if Path::new(plan_file).is_absolute() {
-        bail!("Error: Plan file must be a relative path, got: {}", plan_file);
+        bail!(
+            "Error: Plan file must be a relative path, got: {}",
+            plan_file
+        );
     }
     if plan_file.chars().any(char::is_whitespace) {
         bail!("Error: Plan file path cannot contain spaces");
     }
-    if plan_file
-        .chars()
-        .any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '<' | '>' | '(' | ')' | '{' | '}' | '[' | ']' | '!' | '#' | '~' | '*' | '?' | '\\'))
-    {
+    if plan_file.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '$'
+                | '`'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '!'
+                | '#'
+                | '~'
+                | '*'
+                | '?'
+                | '\\'
+        )
+    }) {
         bail!("Error: Plan file path contains shell metacharacters");
     }
 
@@ -4502,7 +4783,12 @@ fn detect_base_branch(project_root: &Path, requested: Option<&str>) -> Result<St
 fn local_branch_exists(project_root: &Path, branch: &str) -> Result<bool> {
     let status = Command::new("git")
         .args(["-C", project_root.to_str().unwrap_or(".")])
-        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch)])
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", branch),
+        ])
         .status()?;
     Ok(status.success())
 }
@@ -4568,8 +4854,13 @@ fn skip_impl_round_prompt(summary_path: &Path, base_branch: &str, start_branch: 
 }
 
 fn build_goal_tracker(plan_content: &str, plan_file: &str) -> String {
-    let goal = extract_section(plan_content, &["goal", "objective", "purpose"])
-        .unwrap_or_else(|| format!("[To be extracted from plan by Claude in Round 0]\n\nSource plan: {}", plan_file));
+    let goal =
+        extract_section(plan_content, &["goal", "objective", "purpose"]).unwrap_or_else(|| {
+            format!(
+                "[To be extracted from plan by Claude in Round 0]\n\nSource plan: {}",
+                plan_file
+            )
+        });
     let acceptance = extract_section(plan_content, &["acceptance", "criteria", "requirements"])
         .unwrap_or_else(|| "[To be defined by Claude in Round 0 based on the plan]".to_string());
 
@@ -4862,7 +5153,12 @@ mod tests {
 
         let result = validate_write(&input);
         assert_eq!(result.decision, "block");
-        assert!(result.reason.unwrap().contains("PR Loop File Write Blocked"));
+        assert!(
+            result
+                .reason
+                .unwrap()
+                .contains("PR Loop File Write Blocked")
+        );
     }
 
     #[test]
@@ -4879,7 +5175,12 @@ mod tests {
 
         let result = validate_edit(&input);
         assert_eq!(result.decision, "block");
-        assert!(result.reason.unwrap().contains("PR Loop File Write Blocked"));
+        assert!(
+            result
+                .reason
+                .unwrap()
+                .contains("PR Loop File Write Blocked")
+        );
     }
 
     #[test]
@@ -4913,7 +5214,12 @@ mod tests {
 
         let result = validate_bash(&input);
         assert_eq!(result.decision, "block");
-        assert!(result.reason.unwrap().contains("State File Modification Blocked"));
+        assert!(
+            result
+                .reason
+                .unwrap()
+                .contains("State File Modification Blocked")
+        );
     }
 
     #[test]
@@ -4960,24 +5266,20 @@ mod tests {
             let root = tempdir.path();
 
             run(Command::new("git").args(["init", "-q"]).current_dir(root));
-            run(
-                Command::new("git")
-                    .args(["config", "user.email", "test@example.com"])
-                    .current_dir(root),
-            );
-            run(
-                Command::new("git")
-                    .args(["config", "user.name", "Test"])
-                    .current_dir(root),
-            );
+            run(Command::new("git")
+                .args(["config", "user.email", "test@example.com"])
+                .current_dir(root));
+            run(Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(root));
 
             std::fs::write(root.join("init.txt"), "init\n").unwrap();
-            run(Command::new("git").args(["add", "init.txt"]).current_dir(root));
-            run(
-                Command::new("git")
-                    .args(["commit", "-q", "-m", "init"])
-                    .current_dir(root),
-            );
+            run(Command::new("git")
+                .args(["add", "init.txt"])
+                .current_dir(root));
+            run(Command::new("git")
+                .args(["commit", "-q", "-m", "init"])
+                .current_dir(root));
 
             let branch_output = Command::new("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -5036,7 +5338,10 @@ mod tests {
 
 /// Check if a line represents an empty session_id field.
 fn is_empty_session_id_line(line: &str) -> bool {
-    matches!(line, "session_id:" | "session_id: " | "session_id: ~" | "session_id: null")
+    matches!(
+        line,
+        "session_id:" | "session_id: " | "session_id: ~" | "session_id: null"
+    )
 }
 
 /// Handle PostToolUse hook for session handshake.
@@ -5144,9 +5449,10 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
         // Write patched content atomically
         let temp_path = format!("{}.tmp.{}", state_file_path, std::process::id());
         if std::fs::write(&temp_path, patched).is_ok()
-            && std::fs::rename(&temp_path, state_file_path).is_err() {
-                let _ = std::fs::remove_file(&temp_path);
-            }
+            && std::fs::rename(&temp_path, state_file_path).is_err()
+        {
+            let _ = std::fs::remove_file(&temp_path);
+        }
     }
 
     // Remove signal file (one-shot: session_id is now recorded)
@@ -5159,9 +5465,10 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
 fn is_protected_state_file(path_lower: &str) -> bool {
     // Check for state.md in .humanize/rlcr/*/ or .humanize/pr-loop/*/
     if (path_lower.contains(".humanize/rlcr/") || path_lower.contains(".humanize/pr-loop/"))
-        && path_lower.ends_with("/state.md") {
-            return true;
-        }
+        && path_lower.ends_with("/state.md")
+    {
+        return true;
+    }
     false
 }
 
@@ -5178,7 +5485,11 @@ fn newest_session_dir(base_dir: &Path) -> Option<PathBuf> {
 }
 
 fn state_status_label(state_file: &Path) -> String {
-    match state_file.file_name().and_then(|name| name.to_str()).unwrap_or_default() {
+    match state_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+    {
         "state.md" => "active".to_string(),
         "finalize-state.md" => "finalize".to_string(),
         "approve-state.md" => "approve".to_string(),
@@ -5202,7 +5513,11 @@ fn join_list(items: &[String], empty: &str) -> String {
 }
 
 fn truncate_one_line(input: &str, max_len: usize) -> String {
-    let single = input.lines().find(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    let single = input
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if single.len() <= max_len {
         single.to_string()
     } else {
@@ -5283,7 +5598,10 @@ fn render_monitor_snapshot_text(snapshot: &MonitorSnapshot) -> String {
     {
         out.push_str(&format!("{key}: {value}\n"));
     }
-    out.push_str(&format!("Content: {} ({})\n", snapshot.content_title, snapshot.content_path));
+    out.push_str(&format!(
+        "Content: {} ({})\n",
+        snapshot.content_title, snapshot.content_path
+    ));
     out.push('\n');
     out.push_str(&snapshot.content);
     if !snapshot.content.ends_with('\n') {
@@ -5331,7 +5649,8 @@ fn rlcr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             content_title: "No Data".to_string(),
             content_path: "N/A".to_string(),
             content: "No RLCR sessions found.".to_string(),
-            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow".to_string(),
+            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow"
+                .to_string(),
         });
     };
     let state_file = humanize_core::state::resolve_any_state_file(&loop_dir)
@@ -5346,8 +5665,12 @@ fn rlcr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
     let summary_preview = fs::read_to_string(&summary_path)
         .map(|content| truncate_one_line(&content, 96))
         .unwrap_or_else(|_| "N/A".to_string());
-    let cache_dir = humanize_cache_base_dir(project_root)
-        .join(loop_dir.file_name().and_then(|name| name.to_str()).unwrap_or("unknown-loop"));
+    let cache_dir = humanize_cache_base_dir(project_root).join(
+        loop_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown-loop"),
+    );
     let mut candidates = collect_dir_files(
         &loop_dir,
         &[
@@ -5368,7 +5691,10 @@ fn rlcr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
         session_path: loop_dir.display().to_string(),
         left_fields: vec![
             ("State File".to_string(), state_file.display().to_string()),
-            ("Round".to_string(), format!("{} / {}", state.current_round, state.max_iterations)),
+            (
+                "Round".to_string(),
+                format!("{} / {}", state.current_round, state.max_iterations),
+            ),
             (
                 "Plan File".to_string(),
                 if state.plan_file.is_empty() {
@@ -5403,9 +5729,15 @@ fn rlcr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
                     state.base_branch.clone()
                 },
             ),
-            ("Model".to_string(), format!("{} ({})", state.codex_model, state.codex_effort)),
+            (
+                "Model".to_string(),
+                format!("{} ({})", state.codex_model, state.codex_effort),
+            ),
             ("Timeout".to_string(), format!("{}s", state.codex_timeout)),
-            ("Ask Codex".to_string(), state.ask_codex_question.to_string()),
+            (
+                "Ask Codex".to_string(),
+                state.ask_codex_question.to_string(),
+            ),
             ("Agent Teams".to_string(), state.agent_teams.to_string()),
         ],
         content_title: "Latest RLCR Artifact".to_string(),
@@ -5427,7 +5759,8 @@ fn pr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             content_title: "No Data".to_string(),
             content_path: "N/A".to_string(),
             content: "No PR loop sessions found.".to_string(),
-            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow".to_string(),
+            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow"
+                .to_string(),
         });
     };
     let state_file = humanize_core::state::resolve_any_state_file(&loop_dir)
@@ -5459,7 +5792,10 @@ fn pr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             ("State File".to_string(), state_file.display().to_string()),
             (
                 "PR Number".to_string(),
-                state.pr_number.map(|n| format!("#{n}")).unwrap_or_else(|| "N/A".to_string()),
+                state
+                    .pr_number
+                    .map(|n| format!("#{n}"))
+                    .unwrap_or_else(|| "N/A".to_string()),
             ),
             (
                 "Branch".to_string(),
@@ -5469,16 +5805,28 @@ fn pr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
                     state.start_branch.clone()
                 },
             ),
-            ("Round".to_string(), format!("{} / {}", state.current_round, state.max_iterations)),
-            ("Configured Bots".to_string(), join_list(&configured_bots, "none")),
+            (
+                "Round".to_string(),
+                format!("{} / {}", state.current_round, state.max_iterations),
+            ),
+            (
+                "Configured Bots".to_string(),
+                join_list(&configured_bots, "none"),
+            ),
             ("Active Bots".to_string(), join_list(&active_bots, "none")),
         ],
         right_fields: vec![
             (
                 "Startup Case".to_string(),
-                state.startup_case.clone().unwrap_or_else(|| "N/A".to_string()),
+                state
+                    .startup_case
+                    .clone()
+                    .unwrap_or_else(|| "N/A".to_string()),
             ),
-            ("Model".to_string(), format!("{} ({})", state.codex_model, state.codex_effort)),
+            (
+                "Model".to_string(),
+                format!("{} ({})", state.codex_model, state.codex_effort),
+            ),
             ("Timeout".to_string(), format!("{}s", state.codex_timeout)),
             (
                 "Poll".to_string(),
@@ -5490,18 +5838,33 @@ fn pr_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             ),
             (
                 "Latest Commit".to_string(),
-                state.latest_commit_sha.clone().unwrap_or_else(|| "N/A".to_string()),
+                state
+                    .latest_commit_sha
+                    .clone()
+                    .unwrap_or_else(|| "N/A".to_string()),
             ),
             (
                 "Last Trigger".to_string(),
-                state.last_trigger_at.clone().unwrap_or_else(|| "none".to_string()),
+                state
+                    .last_trigger_at
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string()),
             ),
             (
                 "Trigger Comment ID".to_string(),
-                state.trigger_comment_id.clone().unwrap_or_else(|| "none".to_string()),
+                state
+                    .trigger_comment_id
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string()),
             ),
-            ("Resolve File".to_string(), resolve_path.display().to_string()),
-            ("Next Comment File".to_string(), comment_path.display().to_string()),
+            (
+                "Resolve File".to_string(),
+                resolve_path.display().to_string(),
+            ),
+            (
+                "Next Comment File".to_string(),
+                comment_path.display().to_string(),
+            ),
         ],
         content_title: "Latest PR Artifact".to_string(),
         content_path: content_path.display().to_string(),
@@ -5522,7 +5885,8 @@ fn skill_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             content_title: "No Data".to_string(),
             content_path: "N/A".to_string(),
             content: "No ask-codex skill invocations found.".to_string(),
-            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow".to_string(),
+            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow"
+                .to_string(),
         });
     }
 
@@ -5543,7 +5907,8 @@ fn skill_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             content_title: "No Data".to_string(),
             content_path: "N/A".to_string(),
             content: "No ask-codex skill invocations found.".to_string(),
-            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow".to_string(),
+            footer: "q/esc quit | j/k or arrows scroll | g/G top/bottom | f toggle follow"
+                .to_string(),
         });
     }
 
@@ -5578,7 +5943,11 @@ fn skill_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
     let status = metadata_content
         .lines()
         .find_map(|line| line.strip_prefix("status: "))
-        .unwrap_or(if metadata.exists() { "unknown" } else { "running" });
+        .unwrap_or(if metadata.exists() {
+            "unknown"
+        } else {
+            "running"
+        });
     let model = metadata_content
         .lines()
         .find_map(|line| line.strip_prefix("model: "))
@@ -5590,7 +5959,10 @@ fn skill_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
     let question = fs::read_to_string(latest.join("input.md"))
         .map(|content| truncate_one_line(&content, 96))
         .unwrap_or_else(|_| "N/A".to_string());
-    let invocation_id = latest.file_name().and_then(|name| name.to_str()).unwrap_or("unknown");
+    let invocation_id = latest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
     let cache_dir = humanize_cache_base_dir(project_root).join(format!("skill-{invocation_id}"));
     let watched_file = newest_file_by_mtime({
         let mut files = vec![
@@ -5619,7 +5991,10 @@ fn skill_monitor_snapshot(project_root: &Path) -> Result<MonitorSnapshot> {
             ("Running".to_string(), running.to_string()),
         ],
         right_fields: vec![
-            ("Latest Invocation".to_string(), latest.display().to_string()),
+            (
+                "Latest Invocation".to_string(),
+                latest.display().to_string(),
+            ),
             ("Status".to_string(), status.to_string()),
             ("Model".to_string(), format!("{model} ({effort})")),
             ("Question".to_string(), question),
@@ -5662,7 +6037,9 @@ fn render_monitor_tui(
             Line::from(vec![
                 Span::styled(
                     &snapshot.title,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled(
@@ -5757,7 +6134,9 @@ where
                 }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break Ok(()),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        break Ok(());
+                    }
                     KeyCode::Down | KeyCode::Char('j') => {
                         ui_state.follow = false;
                         ui_state.scroll = ui_state.scroll.saturating_add(1);
@@ -5813,208 +6192,21 @@ where
 pub fn handle_monitor(cmd: MonitorCommands) -> Result<()> {
     let project_root = resolve_project_root()?;
     match cmd {
-        MonitorCommands::Rlcr { once, interval_secs } => {
-            run_monitor_loop(once, interval_secs, || rlcr_monitor_snapshot(&project_root))
-        }
-        MonitorCommands::Pr { once, interval_secs } => {
-            run_monitor_loop(once, interval_secs, || pr_monitor_snapshot(&project_root))
-        }
-        MonitorCommands::Skill { once, interval_secs } => {
-            run_monitor_loop(once, interval_secs, || skill_monitor_snapshot(&project_root))
-        }
+        MonitorCommands::Rlcr {
+            once,
+            interval_secs,
+        } => run_monitor_loop(once, interval_secs, || rlcr_monitor_snapshot(&project_root)),
+        MonitorCommands::Pr {
+            once,
+            interval_secs,
+        } => run_monitor_loop(once, interval_secs, || pr_monitor_snapshot(&project_root)),
+        MonitorCommands::Skill {
+            once,
+            interval_secs,
+        } => run_monitor_loop(once, interval_secs, || {
+            skill_monitor_snapshot(&project_root)
+        }),
     }
-}
-
-pub fn handle_install(
-    target: &str,
-    plugin_root: Option<&str>,
-    skills_dir: Option<&str>,
-    kimi_skills_dir: Option<&str>,
-    codex_skills_dir: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
-    let target = target.to_ascii_lowercase();
-    if !matches!(target.as_str(), "claude" | "codex" | "kimi" | "all") {
-        bail!("--target must be one of: claude, codex, kimi, all");
-    }
-
-    let mut kimi_dir = kimi_skills_dir
-        .map(PathBuf::from)
-        .unwrap_or(default_kimi_skills_dir()?);
-    let mut codex_dir = codex_skills_dir
-        .map(PathBuf::from)
-        .unwrap_or(default_codex_skills_dir()?);
-
-    if let Some(legacy_dir) = skills_dir {
-        let legacy = PathBuf::from(legacy_dir);
-        match target.as_str() {
-            "kimi" => kimi_dir = legacy,
-            "codex" => codex_dir = legacy,
-            "all" => {
-                kimi_dir = legacy.clone();
-                codex_dir = legacy;
-            }
-            _ => {}
-        }
-    }
-
-    match target.as_str() {
-        "claude" => {
-            let plugin_root = detect_install_plugin_root(plugin_root)?;
-            install_runtime_assets_into(&plugin_root, dry_run)?;
-        }
-        "codex" => install_skills_into(&codex_dir, dry_run)?,
-        "kimi" => install_skills_into(&kimi_dir, dry_run)?,
-        "all" => {
-            let plugin_root = detect_install_plugin_root(plugin_root)?;
-            install_runtime_assets_into(&plugin_root, dry_run)?;
-            install_skills_into(&codex_dir, dry_run)?;
-            if kimi_dir != codex_dir {
-                install_skills_into(&kimi_dir, dry_run)?;
-            }
-        }
-        _ => unreachable!(),
-    }
-
-    println!("Ensure `humanize` is installed on PATH before using the installed assets.");
-    Ok(())
-}
-
-fn install_runtime_assets_into(plugin_root: &Path, dry_run: bool) -> Result<()> {
-    copy_embedded_dir(&HOOK_ASSETS, &plugin_root.join("hooks"), dry_run)?;
-    copy_embedded_dir(&COMMAND_ASSETS, &plugin_root.join("commands"), dry_run)?;
-    copy_embedded_dir(&AGENT_ASSETS, &plugin_root.join("agents"), dry_run)?;
-    copy_embedded_dir(&CLAUDE_PLUGIN_ASSETS, &plugin_root.join(".claude-plugin"), dry_run)?;
-    copy_embedded_dir(&DOC_IMAGE_ASSETS, &plugin_root.join("docs/images"), dry_run)?;
-    println!("Using plugin root: {}", plugin_root.display());
-    println!("Installed runtime assets to {}", plugin_root.display());
-    Ok(())
-}
-
-fn detect_install_plugin_root(plugin_root: Option<&str>) -> Result<PathBuf> {
-    if let Some(path) = plugin_root {
-        return Ok(PathBuf::from(path));
-    }
-
-    if let Ok(path) = std::env::var("CLAUDE_PLUGIN_ROOT") {
-        if !path.trim().is_empty() {
-            return Ok(PathBuf::from(path));
-        }
-    }
-
-    default_claude_plugin_root()
-}
-
-fn default_claude_plugin_root() -> Result<PathBuf> {
-    #[cfg(windows)]
-    {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            if !appdata.trim().is_empty() {
-                return Ok(PathBuf::from(appdata).join("humanize-rs"));
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            if !home.trim().is_empty() {
-                return Ok(
-                    PathBuf::from(home)
-                        .join("Library")
-                        .join("Application Support")
-                        .join("humanize-rs"),
-                );
-            }
-        }
-    }
-
-    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
-        if !xdg_data_home.trim().is_empty() {
-            return Ok(PathBuf::from(xdg_data_home).join("humanize-rs"));
-        }
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            return Ok(PathBuf::from(home).join(".local").join("share").join("humanize-rs"));
-        }
-    }
-
-    bail!(
-        "Could not determine a default plugin root. Use --plugin-root or set CLAUDE_PLUGIN_ROOT."
-    )
-}
-
-fn remove_dir_if_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
-    }
-    Ok(())
-}
-
-fn copy_embedded_dir(dir: &Dir<'_>, dst: &Path, dry_run: bool) -> Result<()> {
-    if dry_run {
-        println!("DRY-RUN sync embedded dir -> {}", dst.display());
-        return Ok(());
-    }
-
-    remove_dir_if_exists(dst)?;
-
-    for file in dir.files() {
-        let relative = file.path().strip_prefix(dir.path()).unwrap_or(file.path());
-        let target = dst.join(relative);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(target, file.contents())?;
-    }
-
-    for subdir in dir.dirs() {
-        let relative = subdir.path().strip_prefix(dir.path()).unwrap_or(subdir.path());
-        copy_embedded_dir(subdir, &dst.join(relative), dry_run)?;
-    }
-
-    Ok(())
-}
-
-fn default_kimi_skills_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config/agents/skills"))
-}
-
-fn default_codex_skills_dir() -> Result<PathBuf> {
-    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-        return Ok(PathBuf::from(codex_home).join("skills"));
-    }
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".codex/skills"))
-}
-
-fn install_skills_into(skills_dir: &Path, dry_run: bool) -> Result<()> {
-    let skill_names = ["ask-codex", "humanize", "humanize-gen-plan", "humanize-rlcr"];
-
-    if dry_run {
-        println!("DRY-RUN target skills dir: {}", skills_dir.display());
-    } else {
-        fs::create_dir_all(skills_dir)?;
-    }
-
-    for skill_name in &skill_names {
-        let Some(skill_dir) = SKILL_ASSETS.get_dir(skill_name) else {
-            bail!("Embedded skill directory not found: {}", skill_name);
-        };
-        let dst = skills_dir.join(skill_name);
-        if dry_run {
-            println!("DRY-RUN sync embedded skill {} -> {}", skill_name, dst.display());
-        } else {
-            copy_embedded_dir(skill_dir, &dst, false)?;
-        }
-    }
-
-    println!("Skills synced to {}", skills_dir.display());
-    println!("Installed skills expect `humanize` to be available on PATH.");
-    Ok(())
 }
 
 /// Handle gate commands.
@@ -6025,7 +6217,12 @@ pub fn handle_gate(cmd: GateCommands) -> Result<()> {
             transcript_path,
             project_root,
             json,
-        } => handle_gate_rlcr(session_id.as_deref(), transcript_path.as_deref(), project_root.as_deref(), json),
+        } => handle_gate_rlcr(
+            session_id.as_deref(),
+            transcript_path.as_deref(),
+            project_root.as_deref(),
+            json,
+        ),
     }
 }
 
@@ -6088,7 +6285,10 @@ fn handle_gate_rlcr(
         }
     };
 
-    let decision = parsed.get("decision").and_then(|v| v.as_str()).unwrap_or_default();
+    let decision = parsed
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if decision == "block" {
         if print_json {
             println!("{}", stdout);

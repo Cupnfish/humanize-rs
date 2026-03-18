@@ -197,10 +197,7 @@ pub fn is_round_file_type(path: &str, file_type: RoundFileType) -> bool {
     };
 
     // Extract filename
-    let filename = path_lower
-        .rsplit('/')
-        .next()
-        .unwrap_or(&path_lower);
+    let filename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
 
     // Must start with "round-"
     if !filename.starts_with("round-") {
@@ -263,7 +260,11 @@ pub fn extract_round_number(filename: &str) -> Option<u32> {
 /// - It's the current round's summary/prompt file
 /// - It's a historical summary file (for context)
 /// - It's in the active loop directory and matches current round
-pub fn is_allowlisted_file(file_path: &str, loop_dir: &std::path::Path, current_round: u32) -> bool {
+pub fn is_allowlisted_file(
+    file_path: &str,
+    loop_dir: &std::path::Path,
+    current_round: u32,
+) -> bool {
     let file_path_lower = file_path.to_lowercase();
     let loop_dir_str = loop_dir.to_string_lossy().to_lowercase();
 
@@ -273,7 +274,10 @@ pub fn is_allowlisted_file(file_path: &str, loop_dir: &std::path::Path, current_
     }
 
     // Extract filename
-    let filename = file_path_lower.rsplit('/').next().unwrap_or(&file_path_lower);
+    let filename = file_path_lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&file_path_lower);
 
     // Allow current round's summary and prompt
     let current_summary = format!("round-{}-summary.md", current_round);
@@ -360,27 +364,52 @@ mod tests {
     #[test]
     fn test_is_round_file_type() {
         // Summary files
-        assert!(is_round_file_type("round-1-summary.md", RoundFileType::Summary));
-        assert!(is_round_file_type(".humanize/rlcr/test/round-2-summary.md", RoundFileType::Summary));
-        assert!(!is_round_file_type("round-1-prompt.md", RoundFileType::Summary));
+        assert!(is_round_file_type(
+            "round-1-summary.md",
+            RoundFileType::Summary
+        ));
+        assert!(is_round_file_type(
+            ".humanize/rlcr/test/round-2-summary.md",
+            RoundFileType::Summary
+        ));
+        assert!(!is_round_file_type(
+            "round-1-prompt.md",
+            RoundFileType::Summary
+        ));
 
         // Prompt files
-        assert!(is_round_file_type("round-1-prompt.md", RoundFileType::Prompt));
-        assert!(!is_round_file_type("round-1-summary.md", RoundFileType::Prompt));
+        assert!(is_round_file_type(
+            "round-1-prompt.md",
+            RoundFileType::Prompt
+        ));
+        assert!(!is_round_file_type(
+            "round-1-summary.md",
+            RoundFileType::Prompt
+        ));
 
         // Todos files
         assert!(is_round_file_type("round-1-todos.md", RoundFileType::Todos));
-        assert!(!is_round_file_type("round-1-summary.md", RoundFileType::Todos));
+        assert!(!is_round_file_type(
+            "round-1-summary.md",
+            RoundFileType::Todos
+        ));
 
         // Invalid patterns
         assert!(!is_round_file_type("roundup.md", RoundFileType::Summary));
-        assert!(!is_round_file_type("round--summary.md", RoundFileType::Summary));
+        assert!(!is_round_file_type(
+            "round--summary.md",
+            RoundFileType::Summary
+        ));
     }
 
     #[test]
     fn test_is_in_humanize_loop_dir() {
-        assert!(is_in_humanize_loop_dir(".humanize/rlcr/2026-03-17/state.md"));
-        assert!(is_in_humanize_loop_dir(".humanize/pr-loop/2026-03-17/state.md"));
+        assert!(is_in_humanize_loop_dir(
+            ".humanize/rlcr/2026-03-17/state.md"
+        ));
+        assert!(is_in_humanize_loop_dir(
+            ".humanize/pr-loop/2026-03-17/state.md"
+        ));
         assert!(!is_in_humanize_loop_dir("src/main.rs"));
         assert!(!is_in_humanize_loop_dir(".humanize/config.json"));
     }
@@ -389,7 +418,10 @@ mod tests {
     fn test_extract_round_number() {
         assert_eq!(extract_round_number("round-1-summary.md"), Some(1));
         assert_eq!(extract_round_number("round-42-prompt.md"), Some(42));
-        assert_eq!(extract_round_number(".humanize/rlcr/test/round-3-todos.md"), Some(3));
+        assert_eq!(
+            extract_round_number(".humanize/rlcr/test/round-3-todos.md"),
+            Some(3)
+        );
         assert_eq!(extract_round_number("roundup.md"), None);
         assert_eq!(extract_round_number("round--summary.md"), None);
         assert_eq!(extract_round_number("src/main.rs"), None);

@@ -2,6 +2,12 @@
 
 This guide describes the native Rust `humanize` workflow.
 
+Humanize is designed to run as:
+
+- a Rust binary on `PATH`
+- a shared plugin package installed into Claude Code or Droid
+- a Codex-backed review workflow
+
 ## Core Commands
 
 ### Generate Plan
@@ -72,12 +78,13 @@ Humanize stores runtime state under `.humanize/`:
 - `.humanize/pr-loop/`
 - `.humanize/skill/`
 
-## Runtime Assets
+## Plugin Assets
 
-The runtime uses:
+The shared plugin package uses:
 
-- `prompt-template/`
-- `skills/`
 - `hooks/hooks.json`
 - `commands/`
 - `agents/`
+- `skills/`
+
+The binary embeds `prompt-template/` internally.

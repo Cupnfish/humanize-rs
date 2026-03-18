@@ -12,7 +12,7 @@ This repository is a Rust rewrite of the original Humanize project:
 
 The workflow model remains compatible, but the implementation and runtime orchestration are now handled by Rust.
 
-For Claude Code plugin packaging, the plugin package name is `humanize-rs`.
+The shared plugin package name is `humanize-rs`.
 
 ## Overview
 
@@ -34,15 +34,31 @@ State is stored under `.humanize/` in the working project:
 - `.humanize/pr-loop/`
 - `.humanize/skill/`
 
+## Architecture
+
+Humanize is now organized as two shipped artifacts plus one external backend:
+
+1. `humanize` binary
+   The Rust runtime engine. It embeds the prompt templates and owns all loop, hook, validation, monitor, and Codex orchestration logic.
+2. Plugin package
+   The repository-root plugin contents: `.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `skills/`, and `docs/images/`.
+   This same package is used by both Claude Code and Droid.
+3. Codex CLI
+   The review backend used by RLCR, PR validation, and `ask-codex`.
+
+There is no separate Codex-host or Kimi-host installation path anymore.
+Codex is kept only as the independent reviewer backend.
+
 ## Repository Layout
 
 - `crates/core`: shared state, filesystem, git, codex, and template logic
 - `crates/cli`: the `humanize` executable
-- `prompt-template/`: prompt templates used by the runtime
-- `skills/`: source `SKILL.md` files
-- `hooks/`: hook configuration pointing to `humanize` on `PATH`
-- `commands/`: command definitions for plugin/skill runtimes
+- `prompt-template/`: source prompt templates embedded into the binary
+- `skills/`: plugin-bundled `SKILL.md` files for Claude Code and Droid
+- `hooks/`: plugin hook configuration pointing to `humanize` on `PATH`
+- `commands/`: plugin slash-command definitions
 - `agents/`: supporting agent definitions
+- `.claude-plugin/`: shared plugin metadata
 - `docs/`: installation and usage docs
 
 ## Runtime Assets
@@ -57,10 +73,10 @@ Prompt templates live under `prompt-template/`:
 - `prompt-template/plan/`
 - `prompt-template/pr-loop/`
 
-The runtime binary embeds the prompt templates.
-The top-level `prompt-template/` directory is the source of truth for development and maintenance, and release builds vendor a copy into the CLI crate for publishing.
+The `humanize` binary embeds these templates.
+The top-level `prompt-template/` directory is the source of truth for development and maintenance.
 
-### Skills
+### Plugin Skills
 
 Source skill definitions live under `skills/`:
 
@@ -69,15 +85,16 @@ Source skill definitions live under `skills/`:
 - `skills/humanize-gen-plan/SKILL.md`
 - `skills/humanize-rlcr/SKILL.md`
 
-Installed skills expect the `humanize` executable to be available on `PATH`.
+These skills are part of the plugin package for Claude Code and Droid.
+They are not installed separately.
 
 ## Installation
 
 The recommended model is:
 
 1. install `humanize` on `PATH`
-2. install Claude integration files if needed
-3. install skills if needed
+2. install `codex` on `PATH`
+3. install the plugin package in Claude Code or Droid
 
 ### 1. Install `humanize` on `PATH`
 
@@ -107,82 +124,46 @@ which humanize
 humanize --help
 ```
 
-### 2. Install For Your Target
+### 2. Install Codex CLI
+
+Humanize uses Codex as an independent reviewer backend.
+Install Codex CLI separately and make sure `codex` is on `PATH`.
+
+Verify:
+
+```bash
+codex --version
+```
+
+### 3. Install the Plugin Package
+
+The same plugin package works in both Claude Code and Droid.
+Droid documents direct compatibility with Claude Code plugins, and this repository has been verified locally with `droid plugin install`.
 
 Claude Code:
 
 ```bash
-humanize install --target claude
-```
-
-Codex:
-
-```bash
-humanize install --target codex
-```
-
-Kimi:
-
-```bash
-humanize install --target kimi
-```
-
-Everything:
-
-```bash
-humanize install --target all
-```
-
-Useful options:
-
-```bash
-# override Claude install root
-humanize install --target claude --plugin-root /custom/path
-
-# override skill install root
-humanize install --target codex --skills-dir /custom/skills
-
-# preview only
-humanize install --target all --dry-run
-```
-
-Default locations:
-
-- Claude: `%APPDATA%\\humanize-rs` on Windows, `~/Library/Application Support/humanize-rs` on macOS, `${XDG_DATA_HOME:-~/.local/share}/humanize-rs` on Linux/Unix
-- Codex: `${CODEX_HOME:-~/.codex}/skills/`
-- Kimi: `~/.config/agents/skills/`
-
-What each target installs:
-
-- `claude`: `.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `docs/images/`
-- `codex`: skill definitions only
-- `kimi`: skill definitions only
-- `all`: all of the above
-
-`humanize install` never installs the executable itself.
-It assumes `humanize` is already on `PATH`.
-
-### Claude Marketplace Installation
-
-Claude marketplace installation is a **two-step** process:
-
-1. install the `humanize` binary on `PATH`
-2. install the Claude plugin package
-
-Example:
-
-```bash
-cargo install humanize-cli --bin humanize
 claude plugin marketplace add ./
 claude plugin install humanize-rs@humania
 ```
 
-Validation:
+Droid:
 
 ```bash
-which humanize
-claude plugin list
+droid plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
+droid plugin install humanize-rs@humanize-rs
 ```
+
+The plugin package contains:
+
+- `.claude-plugin/`
+- `hooks/`
+- `commands/`
+- `agents/`
+- `skills/`
+
+The `humanize` executable still comes from `PATH`.
+The binary does not install plugin assets and does not install skills separately.
 
 ## Local Development
 
@@ -332,20 +313,22 @@ Examples:
 - `prompt-template/codex/full-alignment-review.md`
 - `prompt-template/pr-loop/round-0-task-has-comments.md`
 
-Update skill definitions in `skills/`, then reinstall:
+Update plugin-facing assets in:
 
-```bash
-humanize install --target codex
-# or
-humanize install --target kimi
-```
+- `skills/`
+- `hooks/`
+- `commands/`
+- `agents/`
+- `.claude-plugin/`
+
+Then reload or reinstall the plugin in Claude Code or Droid.
 
 ## Additional Documentation
 
 - [docs/usage.md](./docs/usage.md)
 - [docs/install-for-claude.md](./docs/install-for-claude.md)
+- [docs/install-for-droid.md](./docs/install-for-droid.md)
 - [docs/install-for-codex.md](./docs/install-for-codex.md)
-- [docs/install-for-kimi.md](./docs/install-for-kimi.md)
 
 ## Build
 

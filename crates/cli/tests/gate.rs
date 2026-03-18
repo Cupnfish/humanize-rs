@@ -19,23 +19,19 @@ impl GateRepo {
         let root = tempdir.path().to_path_buf();
 
         run(Command::new("git").args(["init", "-q"]).current_dir(&root));
-        run(
-            Command::new("git")
-                .args(["config", "user.email", "test@example.com"])
-                .current_dir(&root),
-        );
-        run(
-            Command::new("git")
-                .args(["config", "user.name", "Test"])
-                .current_dir(&root),
-        );
+        run(Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&root));
+        run(Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&root));
         fs::write(root.join("README.md"), "# temp\n").unwrap();
-        run(Command::new("git").args(["add", "README.md"]).current_dir(&root));
-        run(
-            Command::new("git")
-                .args(["commit", "-q", "-m", "init"])
-                .current_dir(&root),
-        );
+        run(Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&root));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "init"])
+            .current_dir(&root));
 
         let loop_dir = root.join(".humanize/rlcr/2026-01-18_12-00-00");
         if with_active_loop {
@@ -64,7 +60,12 @@ impl GateRepo {
 fn gate_rlcr_allows_when_no_active_loop() {
     let repo = GateRepo::new(false);
     let output = Command::new(bin())
-        .args(["gate", "rlcr", "--project-root", repo.root.to_str().unwrap()])
+        .args([
+            "gate",
+            "rlcr",
+            "--project-root",
+            repo.root.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
 
@@ -76,7 +77,12 @@ fn gate_rlcr_allows_when_no_active_loop() {
 fn gate_rlcr_blocks_and_maps_to_exit_10() {
     let repo = GateRepo::new(true);
     let output = Command::new(bin())
-        .args(["gate", "rlcr", "--project-root", repo.root.to_str().unwrap()])
+        .args([
+            "gate",
+            "rlcr",
+            "--project-root",
+            repo.root.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
 
@@ -90,7 +96,13 @@ fn gate_rlcr_blocks_and_maps_to_exit_10() {
 fn gate_rlcr_json_mode_returns_raw_json() {
     let repo = GateRepo::new(true);
     let output = Command::new(bin())
-        .args(["gate", "rlcr", "--project-root", repo.root.to_str().unwrap(), "--json"])
+        .args([
+            "gate",
+            "rlcr",
+            "--project-root",
+            repo.root.to_str().unwrap(),
+            "--json",
+        ])
         .output()
         .unwrap();
 

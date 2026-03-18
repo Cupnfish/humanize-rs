@@ -107,23 +107,8 @@ pub struct BashValidatorInput {
 
 /// Patterns that indicate file modification.
 const FILE_MODIFICATION_PATTERNS: &[&str] = &[
-    "rm ",
-    "rm\t",
-    "rmdir",
-    "mv ",
-    "mv\t",
-    "cp ",
-    "> ",
-    ">>",
-    "2>",
-    "| ",
-    " && ",
-    "; ",
-    "`",
-    "$(",
-    "chmod",
-    "chown",
-    "mkdir -p",
+    "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "> ", ">>", "2>", "| ", " && ", "; ", "`", "$(",
+    "chmod", "chown", "mkdir -p",
 ];
 
 /// Patterns that are generally safe.
@@ -179,7 +164,9 @@ pub fn validate_bash(input: &BashValidatorInput) -> HookResult {
 
 /// Check if a pipe is to a read-only command.
 fn is_pipe_to_readonly(cmd: &str) -> bool {
-    let readonly_commands = ["head", "tail", "grep", "wc", "sort", "uniq", "cut", "awk", "sed -n"];
+    let readonly_commands = [
+        "head", "tail", "grep", "wc", "sort", "uniq", "cut", "awk", "sed -n",
+    ];
     for ro_cmd in readonly_commands {
         if cmd.contains(&format!("| {}", ro_cmd)) {
             return true;
@@ -201,18 +188,12 @@ pub fn validate_plan_file(input: &PlanFileValidatorInput) -> HookResult {
 
     // Block absolute paths
     if path.starts_with('/') {
-        return HookResult::blocked(format!(
-            "Absolute path not allowed for plan file: {}",
-            path
-        ));
+        return HookResult::blocked(format!("Absolute path not allowed for plan file: {}", path));
     }
 
     // Block parent traversal
     if path.contains("..") {
-        return HookResult::blocked(format!(
-            "Parent directory traversal not allowed: {}",
-            path
-        ));
+        return HookResult::blocked(format!("Parent directory traversal not allowed: {}", path));
     }
 
     // Block symlinks (would need filesystem check for full implementation)

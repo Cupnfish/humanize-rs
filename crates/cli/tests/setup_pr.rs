@@ -26,8 +26,7 @@ impl PrSetupEnv {
         fs::create_dir_all(&bin_dir).unwrap();
         fs::create_dir_all(&fixtures_dir).unwrap();
 
-        let mock_gh_src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/mocks/gh");
+        let mock_gh_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/mocks/gh");
         fs::copy(&mock_gh_src, bin_dir.join("gh")).unwrap();
         make_executable(&bin_dir.join("gh"));
 
@@ -39,24 +38,22 @@ impl PrSetupEnv {
         fs::write(fixtures_dir.join("pr-reviews.json"), "[]").unwrap();
         fs::write(fixtures_dir.join("reactions.json"), "[]").unwrap();
 
-        run(Command::new("git").args(["init", "-q"]).current_dir(&project_dir));
-        run(
-            Command::new("git")
-                .args(["config", "user.email", "test@example.com"])
-                .current_dir(&project_dir),
-        );
-        run(
-            Command::new("git")
-                .args(["config", "user.name", "Test"])
-                .current_dir(&project_dir),
-        );
+        run(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&project_dir));
         fs::write(project_dir.join("README.md"), "# temp\n").unwrap();
-        run(Command::new("git").args(["add", "README.md"]).current_dir(&project_dir));
-        run(
-            Command::new("git")
-                .args(["commit", "-q", "-m", "init"])
-                .current_dir(&project_dir),
-        );
+        run(Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "init"])
+            .current_dir(&project_dir));
 
         Self {
             _tempdir: tempdir,
@@ -67,7 +64,11 @@ impl PrSetupEnv {
     }
 
     fn path_env(&self) -> String {
-        format!("{}:{}", self.bin_dir.display(), std::env::var("PATH").unwrap())
+        format!(
+            "{}:{}",
+            self.bin_dir.display(),
+            std::env::var("PATH").unwrap()
+        )
     }
 
     fn project(&self) -> &Path {
@@ -137,9 +138,11 @@ fn setup_pr_case45_missing_trigger_id_fails_and_cleans_loop_dir() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("trigger comment ID"));
-    assert!(fs::read_dir(env.project().join(".humanize/pr-loop"))
-        .map(|mut it| it.next().is_none())
-        .unwrap_or(true));
+    assert!(
+        fs::read_dir(env.project().join(".humanize/pr-loop"))
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(true)
+    );
 }
 
 fn first_loop_dir(base: PathBuf) -> PathBuf {

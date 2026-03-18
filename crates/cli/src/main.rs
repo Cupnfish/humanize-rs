@@ -1,6 +1,6 @@
 //! Humanize CLI
 //!
-//! Command-line interface for the Humanize Claude Code plugin.
+//! Command-line interface for the Humanize runtime used by the Claude Code and Droid plugin package.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -10,7 +10,7 @@ mod hook_input;
 
 #[derive(Parser)]
 #[command(name = "humanize")]
-#[command(about = "Humanize CLI - Claude Code plugin for iterative development", long_about = None)]
+#[command(about = "Humanize CLI - Rust runtime for the Humanize plugin workflows", long_about = None)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -27,7 +27,7 @@ enum Commands {
     #[command(subcommand)]
     Cancel(CancelCommands),
 
-    /// Hook subcommands (called by Claude Code hooks)
+    /// Hook subcommands (called by plugin hooks)
     /// All hooks read JSON input from stdin
     #[command(subcommand)]
     Hook(HookCommands),
@@ -39,33 +39,6 @@ enum Commands {
     /// Monitor Humanize sessions
     #[command(subcommand)]
     Monitor(MonitorCommands),
-
-    /// Install runtime assets and/or skills
-    Install {
-        /// Install target: claude, codex, kimi, or all
-        #[arg(long, default_value = "claude")]
-        target: String,
-
-        /// Plugin root directory override (used for claude/all)
-        #[arg(long)]
-        plugin_root: Option<String>,
-
-        /// Shared skills directory override (used for codex/kimi/all)
-        #[arg(long)]
-        skills_dir: Option<String>,
-
-        /// Kimi skills directory override
-        #[arg(long)]
-        kimi_skills_dir: Option<String>,
-
-        /// Codex skills directory override
-        #[arg(long)]
-        codex_skills_dir: Option<String>,
-
-        /// Preview without writing
-        #[arg(long)]
-        dry_run: bool,
-    },
 
     /// Gate commands for skill-mode loop enforcement
     #[command(subcommand)]
@@ -118,7 +91,12 @@ enum SetupCommands {
         track_plan_file: bool,
 
         /// Maximum iterations
-        #[arg(short = 'm', long = "max-iterations", alias = "max", default_value = "42")]
+        #[arg(
+            short = 'm',
+            long = "max-iterations",
+            alias = "max",
+            default_value = "42"
+        )]
         max_iterations: u32,
 
         /// Base branch for comparison
@@ -165,7 +143,12 @@ enum SetupCommands {
         codex: bool,
 
         /// Maximum iterations
-        #[arg(short = 'm', long = "max-iterations", alias = "max", default_value = "42")]
+        #[arg(
+            short = 'm',
+            long = "max-iterations",
+            alias = "max",
+            default_value = "42"
+        )]
         max_iterations: u32,
 
         /// Codex model to use
@@ -288,27 +271,13 @@ fn main() -> Result<()> {
         Commands::Hook(hook_cmd) => commands::handle_hook(hook_cmd),
         Commands::Stop(stop_cmd) => commands::handle_stop(stop_cmd),
         Commands::Monitor(monitor_cmd) => commands::handle_monitor(monitor_cmd),
-        Commands::Install {
-            target,
-            plugin_root,
-            skills_dir,
-            kimi_skills_dir,
-            codex_skills_dir,
-            dry_run,
-        } => commands::handle_install(
-            &target,
-            plugin_root.as_deref(),
-            skills_dir.as_deref(),
-            kimi_skills_dir.as_deref(),
-            codex_skills_dir.as_deref(),
-            dry_run,
-        ),
         Commands::Gate(gate_cmd) => commands::handle_gate(gate_cmd),
-        Commands::AskCodex { prompt, model, effort, timeout } => {
-            commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout)
-        }
-        Commands::GenPlan { input, output } => {
-            commands::handle_gen_plan(&input, &output)
-        }
+        Commands::AskCodex {
+            prompt,
+            model,
+            effort,
+            timeout,
+        } => commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout),
+        Commands::GenPlan { input, output } => commands::handle_gen_plan(&input, &output),
     }
 }

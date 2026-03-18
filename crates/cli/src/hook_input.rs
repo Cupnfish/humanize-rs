@@ -11,7 +11,7 @@
 //! }
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 
@@ -85,7 +85,10 @@ pub fn read_hook_input(require_tool_name: bool) -> Result<HookInput> {
 
     // Validate JSON depth
     if is_deeply_nested(&input, MAX_JSON_DEPTH) {
-        bail!("Error: JSON structure exceeds maximum depth of {}", MAX_JSON_DEPTH);
+        bail!(
+            "Error: JSON structure exceeds maximum depth of {}",
+            MAX_JSON_DEPTH
+        );
     }
 
     // Parse JSON
@@ -134,7 +137,11 @@ fn is_deeply_nested(json: &str, max_depth: usize) -> bool {
 
 /// Extract a string field from tool_input.
 pub fn get_string_field(input: &HookInput, field: &str) -> Option<String> {
-    input.tool_input.get(field).and_then(|v| v.as_str()).map(|s| s.to_string())
+    input
+        .tool_input
+        .get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Extract file_path from tool_input.

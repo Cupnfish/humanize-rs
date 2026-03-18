@@ -34,7 +34,11 @@ impl GenPlanEnv {
     }
 
     fn path_env(&self) -> String {
-        format!("{}:{}", self.bin_dir.display(), std::env::var("PATH").unwrap())
+        format!(
+            "{}:{}",
+            self.bin_dir.display(),
+            std::env::var("PATH").unwrap()
+        )
     }
 
     fn mock_codex(&self, script: &str) {
@@ -49,16 +53,29 @@ fn gen_plan_uses_codex_output_and_keeps_original_draft_section() {
     let env = GenPlanEnv::new();
     let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let counter_file = env.project().join("codex-count");
-    fs::write(env.project().join("draft.md"), "# Draft\n\nNeed a parser.\n").unwrap();
+    fs::write(
+        env.project().join("draft.md"),
+        "# Draft\n\nNeed a parser.\n",
+    )
+    .unwrap();
     fs::create_dir_all(env.project().join("docs")).unwrap();
     env.mock_codex(
         "#!/bin/bash\ncount_file=\"${MOCK_CODEX_COUNTER_FILE:?}\"\ncount=0\n[[ -f \"$count_file\" ]] && count=$(cat \"$count_file\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  if [[ \"$count\" == \"1\" ]]; then\n    printf 'RELEVANT: parser work matches this repository\\n'\n  elif [[ \"$count\" == \"2\" ]]; then\n    printf '{\"issues\":[],\"metrics\":[],\"mixed_languages\":false,\"language_candidates\":[],\"notes\":[]}'\n  else\n    cat <<'EOF'\n```markdown\n# Parser Plan\n\n## Goal Description\nBuild the parser.\n\n## Acceptance Criteria\n- AC-1: Parse valid inputs\n  - Positive Tests (expected to PASS):\n    - accepts valid example\n  - Negative Tests (expected to FAIL):\n    - rejects malformed example\n```\nEOF\n  fi\nfi\n",
     );
 
     let output = Command::new(bin())
-        .args(["gen-plan", "--input", "draft.md", "--output", "docs/plan.md"])
+        .args([
+            "gen-plan",
+            "--input",
+            "draft.md",
+            "--output",
+            "docs/plan.md",
+        ])
         .env("PATH", env.path_env())
-        .env("MOCK_CODEX_COUNTER_FILE", counter_file.display().to_string())
+        .env(
+            "MOCK_CODEX_COUNTER_FILE",
+            counter_file.display().to_string(),
+        )
         .env("CLAUDE_PLUGIN_ROOT", plugin_root.display().to_string())
         .env("CLAUDE_PROJECT_DIR", env.project().display().to_string())
         .current_dir(env.project())
@@ -83,16 +100,29 @@ fn gen_plan_blocks_when_noninteractive_clarification_is_required() {
     let env = GenPlanEnv::new();
     let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let counter_file = env.project().join("codex-count");
-    fs::write(env.project().join("draft.md"), "# Draft\n\nNeed something vague.\n").unwrap();
+    fs::write(
+        env.project().join("draft.md"),
+        "# Draft\n\nNeed something vague.\n",
+    )
+    .unwrap();
     fs::create_dir_all(env.project().join("docs")).unwrap();
     env.mock_codex(
         "#!/bin/bash\ncount_file=\"${MOCK_CODEX_COUNTER_FILE:?}\"\ncount=0\n[[ -f \"$count_file\" ]] && count=$(cat \"$count_file\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  if [[ \"$count\" == \"1\" ]]; then\n    printf 'RELEVANT: related\\n'\n  else\n    printf '{\"issues\":[{\"question\":\"Which parser format?\",\"why\":\"Plan is ambiguous\",\"options\":[\"json\",\"yaml\"]}],\"metrics\":[],\"mixed_languages\":false,\"language_candidates\":[],\"notes\":[]}'\n  fi\nfi\n",
     );
 
     let output = Command::new(bin())
-        .args(["gen-plan", "--input", "draft.md", "--output", "docs/plan.md"])
+        .args([
+            "gen-plan",
+            "--input",
+            "draft.md",
+            "--output",
+            "docs/plan.md",
+        ])
         .env("PATH", env.path_env())
-        .env("MOCK_CODEX_COUNTER_FILE", counter_file.display().to_string())
+        .env(
+            "MOCK_CODEX_COUNTER_FILE",
+            counter_file.display().to_string(),
+        )
         .env("CLAUDE_PLUGIN_ROOT", plugin_root.display().to_string())
         .env("CLAUDE_PROJECT_DIR", env.project().display().to_string())
         .current_dir(env.project())

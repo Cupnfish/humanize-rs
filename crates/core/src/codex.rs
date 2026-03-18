@@ -7,8 +7,7 @@ use std::time::Duration;
 use wait_timeout::ChildExt;
 
 use crate::constants::{
-    DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_TIMEOUT_SECS,
-    ENV_CODEX_BYPASS_SANDBOX,
+    DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_TIMEOUT_SECS, ENV_CODEX_BYPASS_SANDBOX,
 };
 
 /// Configuration for Codex invocations.
@@ -208,10 +207,7 @@ pub fn run_review(base: &str, options: &CodexOptions) -> Result<CodexRunResult, 
 pub fn contains_severity_markers(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.windows(4).any(|window| {
-        window[0] == b'['
-            && window[1] == b'P'
-            && window[2].is_ascii_digit()
-            && window[3] == b']'
+        window[0] == b'[' && window[1] == b'P' && window[2].is_ascii_digit() && window[3] == b']'
     })
 }
 

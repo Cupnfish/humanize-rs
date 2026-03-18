@@ -10,7 +10,7 @@ English version: [README.md](./README.md)
 
 - 原项目：<https://github.com/humania-org/humanize/tree/main>
 
-Claude Code 插件打包名称现在是 `humanize-rs`。
+共享插件包名称是 `humanize-rs`。
 
 ## 概览
 
@@ -32,15 +32,31 @@ RLCR 工作流：
 - `.humanize/pr-loop/`
 - `.humanize/skill/`
 
+## 架构
+
+现在的 Humanize 只保留两类交付物，再加一个外部 review backend：
+
+1. `humanize` binary
+   Rust 运行时引擎。内嵌提示词模板，负责循环、hook、校验、monitor 和 Codex 调度。
+2. 插件包
+   仓库根目录的 `.claude-plugin/`、`hooks/`、`commands/`、`agents/`、`skills/`、`docs/images/`。
+   这同一套包同时给 Claude Code 和 Droid 使用。
+3. Codex CLI
+   RLCR、PR 校验和 `ask-codex` 使用的独立 reviewer backend。
+
+不再保留 Codex/Kimi 作为宿主的单独安装路径。
+Codex 现在只保留 reviewer 角色。
+
 ## 仓库结构
 
 - `crates/core`：状态、文件、git、codex、模板等核心逻辑
 - `crates/cli`：`humanize` 可执行文件
-- `prompt-template/`：运行时提示词模板
-- `skills/`：源 `SKILL.md`
-- `hooks/`：原生 hook 配置
-- `commands/`：命令定义
+- `prompt-template/`：嵌入到 binary 的提示词模板源文件
+- `skills/`：Claude Code / Droid 插件内附带的 `SKILL.md`
+- `hooks/`：插件 hook 配置
+- `commands/`：插件 slash command 定义
 - `agents/`：辅助 agent 定义
+- `.claude-plugin/`：共享插件元数据
 - `docs/`：安装与使用文档
 
 ## 安装方式
@@ -48,7 +64,8 @@ RLCR 工作流：
 推荐顺序：
 
 1. 先把 `humanize` 安装到 `PATH`
-2. 再按目标安装
+2. 再把 `codex` 安装到 `PATH`
+3. 最后在 Claude Code 或 Droid 中安装插件包
 
 ### 1. 安装 `humanize`
 
@@ -78,85 +95,49 @@ which humanize
 humanize --help
 ```
 
-### 2. 按目标安装
+### 2. 安装 Codex CLI
 
-Claude Code：
-
-```bash
-humanize install --target claude
-```
-
-Codex：
-
-```bash
-humanize install --target codex
-```
-
-Kimi：
-
-```bash
-humanize install --target kimi
-```
-
-全部安装：
-
-```bash
-humanize install --target all
-```
-
-常见选项：
-
-```bash
-# 指定 Claude 安装根目录
-humanize install --target claude --plugin-root /custom/path
-
-# 指定 skill 安装目录
-humanize install --target codex --skills-dir /custom/skills
-
-# 预览，不落盘
-humanize install --target all --dry-run
-```
-
-默认位置：
-
-- Claude：Windows 下 `%APPDATA%\\humanize-rs`，macOS 下 `~/Library/Application Support/humanize-rs`，Linux/Unix 下 `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
-- Codex：`${CODEX_HOME:-~/.codex}/skills/`
-- Kimi：`~/.config/agents/skills/`
-
-各目标的安装内容：
-
-- `claude`：`.claude-plugin/`、`hooks/`、`commands/`、`agents/`、`docs/images/`
-- `codex`：仅 skill 定义
-- `kimi`：仅 skill 定义
-- `all`：以上全部
-
-`humanize install` 不会安装 binary 本身。
-它默认假定 `humanize` 已经在 `PATH` 上。
-
-### Claude Marketplace 安装
-
-通过 Claude marketplace 安装是一个**两步过程**：
-
-1. 先把 `humanize` binary 安装到 `PATH`
-2. 再安装 Claude 插件包
-
-例如：
-
-```bash
-cargo install humanize-cli --bin humanize
-claude plugin marketplace add ./
-claude plugin install humanize-rs@humania
-```
+Humanize 使用 Codex 作为独立 reviewer backend。
+单独安装 Codex CLI，并确保 `codex` 在 `PATH` 上。
 
 验证：
 
 ```bash
-which humanize
-claude plugin list
+codex --version
 ```
 
-运行时二进制已经内嵌提示词模板。
-仓库顶层的 `prompt-template/` 和 `skills/` 现在是开发和维护时的源文件目录。
+### 3. 安装插件包
+
+同一套插件包同时支持 Claude Code 和 Droid。
+Droid 官方文档说明它可直接兼容 Claude Code 插件，这个仓库也已经在本地通过 `droid plugin install` 验证。
+
+Claude Code：
+
+```bash
+claude plugin marketplace add ./
+claude plugin install humanize-rs@humania
+```
+
+Droid：
+
+```bash
+droid plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
+droid plugin install humanize-rs@humanize-rs
+```
+
+插件包包含：
+
+- `.claude-plugin/`
+- `hooks/`
+- `commands/`
+- `agents/`
+- `skills/`
+
+`humanize` 可执行文件仍然来自 `PATH`。
+binary 不负责安装插件资产，也不再单独安装 skill。
+
+运行时 binary 已经内嵌提示词模板。
+仓库顶层的 `prompt-template/` 是提示词源文件，`skills/` 是插件包内附带的 skill 源文件。
 
 ## 常用命令
 
@@ -214,11 +195,14 @@ humanize monitor rlcr
 - 提示词模板：`prompt-template/`
 - skill 源文件：`skills/`
 
-改完模板或 skill 后，重新执行 `install --target ...` 即可。
+改完模板或插件资产后：
+
+- 重新构建并安装 `humanize` binary
+- 在 Claude Code 或 Droid 中重新加载或重新安装插件
 
 ## 其他文档
 
 - [docs/usage.md](./docs/usage.md)
 - [docs/install-for-claude.md](./docs/install-for-claude.md)
+- [docs/install-for-droid.md](./docs/install-for-droid.md)
 - [docs/install-for-codex.md](./docs/install-for-codex.md)
-- [docs/install-for-kimi.md](./docs/install-for-kimi.md)

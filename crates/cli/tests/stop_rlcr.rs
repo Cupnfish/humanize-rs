@@ -19,37 +19,29 @@ impl TestRepo {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
 
-        run(
-            Command::new("git")
-                .args(["init", "-q"])
-                .current_dir(root),
-        );
-        run(
-            Command::new("git")
-                .args(["config", "user.email", "test@example.com"])
-                .current_dir(root),
-        );
-        run(
-            Command::new("git")
-                .args(["config", "user.name", "Test"])
-                .current_dir(root),
-        );
+        run(Command::new("git").args(["init", "-q"]).current_dir(root));
+        run(Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(root));
+        run(Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root));
 
         fs::write(root.join("init.txt"), "init\n").unwrap();
-        run(Command::new("git").args(["add", "init.txt"]).current_dir(root));
-        run(
-            Command::new("git")
-                .args(["commit", "-q", "-m", "init"])
-                .current_dir(root),
-        );
+        run(Command::new("git")
+            .args(["add", "init.txt"])
+            .current_dir(root));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "init"])
+            .current_dir(root));
 
         fs::write(root.join(".gitignore"), "plans/\n.humanize/\n").unwrap();
-        run(Command::new("git").args(["add", ".gitignore"]).current_dir(root));
-        run(
-            Command::new("git")
-                .args(["commit", "-q", "-m", "ignore"])
-                .current_dir(root),
-        );
+        run(Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(root));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "ignore"])
+            .current_dir(root));
 
         let loop_dir = root.join(".humanize/rlcr/2024-01-01_12-00-00");
         fs::create_dir_all(&loop_dir).unwrap();
@@ -206,13 +198,17 @@ fn non_complete_feedback_increments_round_and_writes_review_result() {
 fn finalize_phase_completes_without_codex() {
     let repo = TestRepo::new();
     fs::write(repo.root().join("plan.md"), "plan\n").unwrap();
-    fs::write(repo.root().join(".gitignore"), "plans/\n.humanize/\nplan.md\n").unwrap();
-    run(Command::new("git").args(["add", ".gitignore"]).current_dir(repo.root()));
-    run(
-        Command::new("git")
-            .args(["commit", "-q", "-m", "update ignore"])
-            .current_dir(repo.root()),
-    );
+    fs::write(
+        repo.root().join(".gitignore"),
+        "plans/\n.humanize/\nplan.md\n",
+    )
+    .unwrap();
+    run(Command::new("git")
+        .args(["add", ".gitignore"])
+        .current_dir(repo.root()));
+    run(Command::new("git")
+        .args(["commit", "-q", "-m", "update ignore"])
+        .current_dir(repo.root()));
     fs::copy(repo.root().join("plan.md"), repo.loop_dir.join("plan.md")).unwrap();
     let branch = repo.branch();
     fs::write(

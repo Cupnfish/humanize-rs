@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core library for the Humanize Claude Code plugin"
+description = "Core library for the Humanize plugin workflows"
 
 [dependencies]
 anyhow.workspace = true

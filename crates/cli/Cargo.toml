@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "CLI for the Humanize Claude Code plugin"
+description = "Rust runtime for the Humanize plugin workflows"
 
 [[bin]]
 name = "humanize"

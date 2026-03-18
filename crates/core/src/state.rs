@@ -99,7 +99,6 @@ pub struct State {
     pub started_at: Option<String>,
 
     // PR loop specific fields
-
     /// PR number for PR loops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_number: Option<u32>,
@@ -261,12 +260,17 @@ impl State {
         let yaml_value: serde_yaml::Value = serde_yaml::from_str(yaml_content)
             .map_err(|e| StateError::YamlParseError(e.to_string()))?;
 
-        let mapping = yaml_value
-            .as_mapping()
-            .ok_or_else(|| StateError::MissingRequiredField("YAML must be a mapping".to_string()))?;
+        let mapping = yaml_value.as_mapping().ok_or_else(|| {
+            StateError::MissingRequiredField("YAML must be a mapping".to_string())
+        })?;
 
         // Validate required fields per loop-common.sh parse_state_file_strict
-        let required_fields = ["current_round", "max_iterations", "review_started", "base_branch"];
+        let required_fields = [
+            "current_round",
+            "max_iterations",
+            "review_started",
+            "base_branch",
+        ];
         for field in &required_fields {
             if !mapping.contains_key(serde_yaml::Value::String(field.to_string())) {
                 return Err(StateError::MissingRequiredField(field.to_string()));
@@ -298,8 +302,7 @@ impl State {
     /// Save state to a file.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), StateError> {
         let content = self.to_markdown()?;
-        std::fs::write(path.as_ref(), content)
-            .map_err(|e| StateError::IoError(e.to_string()))?;
+        std::fs::write(path.as_ref(), content).map_err(|e| StateError::IoError(e.to_string()))?;
         Ok(())
     }
 
@@ -336,7 +339,7 @@ impl State {
             base_commit,
             review_started,
             ask_codex_question,
-            session_id: None,  // Empty initially, filled by PostToolUse hook
+            session_id: None, // Empty initially, filled by PostToolUse hook
             agent_teams,
             started_at: Some(now),
             // PR loop fields (all None for RLCR)
@@ -445,10 +448,7 @@ impl State {
 /// - With session filter: iterate newest-to-oldest, find first matching session
 /// - Empty stored session_id matches any filter (backward compatibility)
 /// - Only return if still active (has active state file, not terminal)
-pub fn find_active_loop(
-    base_dir: &Path,
-    session_id: Option<&str>,
-) -> Option<PathBuf> {
+pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<PathBuf> {
     if !base_dir.exists() {
         return None;
     }
@@ -514,7 +514,7 @@ pub fn find_active_loop(
 
         // Empty stored session_id matches any session (backward compatibility)
         let matches_session = match stored_session_id {
-            None => true, // No stored session_id, matches any
+            None => true,                                  // No stored session_id, matches any
             Some(ref stored) if stored.is_empty() => true, // Empty matches any
             Some(ref stored) => stored == filter_sid,
         };
@@ -700,9 +700,18 @@ Some content below.
 
     #[test]
     fn test_terminal_state_filename() {
-        assert_eq!(State::terminal_state_filename("complete"), Some("complete-state.md"));
-        assert_eq!(State::terminal_state_filename("cancel"), Some("cancel-state.md"));
-        assert_eq!(State::terminal_state_filename("maxiter"), Some("maxiter-state.md"));
+        assert_eq!(
+            State::terminal_state_filename("complete"),
+            Some("complete-state.md")
+        );
+        assert_eq!(
+            State::terminal_state_filename("cancel"),
+            Some("cancel-state.md")
+        );
+        assert_eq!(
+            State::terminal_state_filename("maxiter"),
+            Some("maxiter-state.md")
+        );
         assert_eq!(State::terminal_state_filename("unknown"), None); // Invalid reason returns None
     }
 

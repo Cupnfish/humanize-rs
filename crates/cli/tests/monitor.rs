@@ -112,9 +112,15 @@ fn monitor_pr_once_shows_none_for_empty_active_bots() {
 #[test]
 fn monitor_skill_once_shows_latest_invocation_summary() {
     let env = MonitorEnv::new();
-    let skill_dir = env.project().join(".humanize/skill/2026-01-18_12-00-00-1234-aaaa");
+    let skill_dir = env
+        .project()
+        .join(".humanize/skill/2026-01-18_12-00-00-1234-aaaa");
     fs::create_dir_all(&skill_dir).unwrap();
-    fs::write(skill_dir.join("input.md"), "# Ask Codex Input\n\n## Question\n\nHow does this work?\n").unwrap();
+    fs::write(
+        skill_dir.join("input.md"),
+        "# Ask Codex Input\n\n## Question\n\nHow does this work?\n",
+    )
+    .unwrap();
     fs::write(skill_dir.join("output.md"), "It works.\n").unwrap();
     fs::write(
         skill_dir.join("metadata.md"),

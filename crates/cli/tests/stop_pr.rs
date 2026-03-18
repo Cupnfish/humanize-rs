@@ -30,8 +30,7 @@ impl PrStopEnv {
         fs::create_dir_all(&fixtures_dir).unwrap();
         fs::create_dir_all(&loop_dir).unwrap();
 
-        let mock_gh_src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/mocks/gh");
+        let mock_gh_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/mocks/gh");
         fs::copy(&mock_gh_src, bin_dir.join("gh")).unwrap();
         make_executable(&bin_dir.join("gh"));
 
@@ -41,24 +40,22 @@ impl PrStopEnv {
         write_fixture(&fixtures_dir, "reactions.json", "[]");
         write_fixture(&fixtures_dir, "comment-reactions.json", "[]");
 
-        run(Command::new("git").args(["init", "-q"]).current_dir(&project_dir));
-        run(
-            Command::new("git")
-                .args(["config", "user.email", "test@example.com"])
-                .current_dir(&project_dir),
-        );
-        run(
-            Command::new("git")
-                .args(["config", "user.name", "Test"])
-                .current_dir(&project_dir),
-        );
+        run(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&project_dir));
         fs::write(project_dir.join("README.md"), "# temp\n").unwrap();
-        run(Command::new("git").args(["add", "README.md"]).current_dir(&project_dir));
-        run(
-            Command::new("git")
-                .args(["commit", "-q", "-m", "init"])
-                .current_dir(&project_dir),
-        );
+        run(Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&project_dir));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "init"])
+            .current_dir(&project_dir));
 
         Self {
             _tempdir: tempdir,
@@ -70,7 +67,11 @@ impl PrStopEnv {
     }
 
     fn path_env(&self) -> String {
-        format!("{}:{}", self.bin_dir.display(), std::env::var("PATH").unwrap())
+        format!(
+            "{}:{}",
+            self.bin_dir.display(),
+            std::env::var("PATH").unwrap()
+        )
     }
 
     fn project(&self) -> &Path {
@@ -103,7 +104,10 @@ impl PrStopEnv {
         let mut cmd = Command::new(bin());
         let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         cmd.env("PATH", self.path_env())
-            .env("MOCK_GH_FIXTURES_DIR", self.fixtures().display().to_string())
+            .env(
+                "MOCK_GH_FIXTURES_DIR",
+                self.fixtures().display().to_string(),
+            )
             .env("MOCK_GH_PR_NUMBER", "123")
             .env("MOCK_GH_PR_STATE", "OPEN")
             .env("MOCK_GH_LATEST_COMMIT_AT", "2026-01-18T10:00:00Z")

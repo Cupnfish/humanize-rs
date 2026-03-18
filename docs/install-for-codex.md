@@ -1,27 +1,29 @@
-# Install for Codex
+# Install Codex CLI
 
-Install hydrated skills for the Codex runtime:
+Humanize no longer uses Codex as a host runtime.
+Codex is now used only as the independent review backend.
+
+## Prerequisites
+
+Install the Codex CLI and make sure it is available on `PATH`.
 
 ```bash
-humanize install --target codex
+codex --version
 ```
 
-Default install location:
+## Why Codex Is Required
 
-```text
-${CODEX_HOME:-~/.codex}/skills/
+Humanize uses Codex for:
+
+- RLCR implementation-phase review
+- RLCR code-review phase
+- PR-loop validation
+- `humanize ask-codex`
+
+## Verify Humanize Can Reach Codex
+
+```bash
+humanize ask-codex "Say hello from Codex."
 ```
 
-Installed skills:
-
-- `ask-codex`
-- `humanize`
-- `humanize-gen-plan`
-- `humanize-rlcr`
-
-The installer does **not** place a binary under the skills directory.
-Installed skills expect:
-
-- `humanize` on `PATH`
-
-The installer writes only skill definitions into the target skills directory.
+If `codex` is not on `PATH`, Humanize will fail the review or consultation step with an explicit error.
