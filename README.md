@@ -107,76 +107,60 @@ which humanize
 humanize --help
 ```
 
-### 2. Install Claude Integration Files
+### 2. Install For Your Target
 
-Install the Claude-facing integration files:
-
-```bash
-humanize install
-```
-
-Default `claude` install-root detection order:
-
-1. `--plugin-root <path>` if provided
-2. `CLAUDE_PLUGIN_ROOT` if set
-3. platform-specific global runtime directory
-
-Default global runtime directory:
-
-- Windows: `%APPDATA%\\humanize-rs`
-- macOS: `~/Library/Application Support/humanize-rs`
-- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
-
-If you want to force a specific target root:
+Claude Code:
 
 ```bash
-humanize install --plugin-root "$PWD"
+humanize install --target claude
 ```
 
-For `--target claude`, this installs:
-
-- `hooks/`
-- `commands/`
-- `agents/`
-- `.claude-plugin/`
-- `docs/images/`
-
-It does **not** copy the executable. The executable must already be available on `PATH`.
-
-### 3. Install Skills
-
-For Codex:
+Codex:
 
 ```bash
 humanize install --target codex
 ```
 
-For Kimi:
+Kimi:
 
 ```bash
 humanize install --target kimi
 ```
 
-Useful variants:
+Everything:
 
 ```bash
-# both targets
 humanize install --target all
-
-# custom target directory
-humanize install --target codex --skills-dir /tmp/my-skills
-
-# preview only
-humanize install --target codex --dry-run
 ```
 
-Default skill install locations:
+Useful options:
 
+```bash
+# override Claude install root
+humanize install --target claude --plugin-root /custom/path
+
+# override skill install root
+humanize install --target codex --skills-dir /custom/skills
+
+# preview only
+humanize install --target all --dry-run
+```
+
+Default locations:
+
+- Claude: `%APPDATA%\\humanize-rs` on Windows, `~/Library/Application Support/humanize-rs` on macOS, `${XDG_DATA_HOME:-~/.local/share}/humanize-rs` on Linux/Unix
 - Codex: `${CODEX_HOME:-~/.codex}/skills/`
 - Kimi: `~/.config/agents/skills/`
 
-For `--target codex` and `--target kimi`, the installer writes only skill directories.
-Installed skills assume `humanize` is on `PATH`.
+What each target installs:
+
+- `claude`: `.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `docs/images/`
+- `codex`: skill definitions only
+- `kimi`: skill definitions only
+- `all`: all of the above
+
+`humanize install` never installs the executable itself.
+It assumes `humanize` is already on `PATH`.
 
 ## Local Development
 

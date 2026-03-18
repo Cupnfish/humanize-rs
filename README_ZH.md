@@ -48,8 +48,7 @@ RLCR 工作流：
 推荐顺序：
 
 1. 先把 `humanize` 安装到 `PATH`
-2. 再安装运行时 assets
-3. 需要的话再安装 skills
+2. 再按目标安装
 
 ### 1. 安装 `humanize`
 
@@ -79,58 +78,60 @@ which humanize
 humanize --help
 ```
 
-### 2. 安装 Claude 集成文件
+### 2. 按目标安装
+
+Claude Code：
 
 ```bash
-humanize install
+humanize install --target claude
 ```
 
-`claude` 目标的默认探测顺序：
-
-1. 如果传了 `--plugin-root <path>`，优先使用它
-2. 否则如果设置了 `CLAUDE_PLUGIN_ROOT`，使用该路径
-3. 否则使用平台默认的全局运行时目录
-
-默认全局运行时目录：
-
-- Windows: `%APPDATA%\\humanize-rs`
-- macOS: `~/Library/Application Support/humanize-rs`
-- Linux/Unix: `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
-
-如果你想强制安装到指定目录：
-
-```bash
-humanize install --plugin-root "$PWD"
-```
-
-对于 `--target claude`，安装器会写入：
-
-- `hooks/`
-- `commands/`
-- `agents/`
-- `.claude-plugin/`
-- `docs/images/`
-
-不会复制 binary，binary 必须已经在 `PATH` 上。
-
-### 3. 安装 skills
-
-Codex:
+Codex：
 
 ```bash
 humanize install --target codex
 ```
 
-Kimi:
+Kimi：
 
 ```bash
 humanize install --target kimi
 ```
 
-如果当前机器上还没有把 `humanize` 装到 `PATH`，本地开发时也可以临时用 `cargo run -- ...` 代替。
+全部安装：
 
-对于 `--target codex` 和 `--target kimi`，安装器只写入 skill 目录。
-安装后的 skill 默认假定 `humanize` 已经在 `PATH` 上。
+```bash
+humanize install --target all
+```
+
+常见选项：
+
+```bash
+# 指定 Claude 安装根目录
+humanize install --target claude --plugin-root /custom/path
+
+# 指定 skill 安装目录
+humanize install --target codex --skills-dir /custom/skills
+
+# 预览，不落盘
+humanize install --target all --dry-run
+```
+
+默认位置：
+
+- Claude：Windows 下 `%APPDATA%\\humanize-rs`，macOS 下 `~/Library/Application Support/humanize-rs`，Linux/Unix 下 `${XDG_DATA_HOME:-~/.local/share}/humanize-rs`
+- Codex：`${CODEX_HOME:-~/.codex}/skills/`
+- Kimi：`~/.config/agents/skills/`
+
+各目标的安装内容：
+
+- `claude`：`.claude-plugin/`、`hooks/`、`commands/`、`agents/`、`docs/images/`
+- `codex`：仅 skill 定义
+- `kimi`：仅 skill 定义
+- `all`：以上全部
+
+`humanize install` 不会安装 binary 本身。
+它默认假定 `humanize` 已经在 `PATH` 上。
 
 运行时二进制已经内嵌提示词模板。
 仓库顶层的 `prompt-template/` 和 `skills/` 现在是开发和维护时的源文件目录。
