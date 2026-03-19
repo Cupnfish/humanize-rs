@@ -1,26 +1,113 @@
 ---
 name: humanize-gen-plan
-description: Generate a structured implementation plan from a draft using `humanize gen-plan`.
+description: Generate a structured implementation plan from a draft document. Validates input, checks relevance, analyzes for issues, and generates a complete plan.md with acceptance criteria.
 type: flow
 user-invocable: false
 ---
 
 # Humanize Generate Plan
 
-Requirement: `humanize` must be available on `PATH`.
+Transforms a rough draft document into a well-structured implementation plan with clear goals, acceptance criteria (AC-X format), path boundaries, and feasibility suggestions.
 
-Run:
+The `humanize gen-plan` command executes the workflow below end-to-end:
 
 ```bash
 humanize gen-plan --input <draft.md> --output <plan.md>
 ```
 
-The native command handles:
+```mermaid
+flowchart TD
+    BEGIN([BEGIN]) --> VALIDATE["Validate input/output paths<br/>Run: humanize gen-plan --input &lt;draft&gt; --output &lt;plan&gt;"]
+    VALIDATE --> CHECK{Validation passed?}
+    CHECK -->|No| REPORT_ERROR["Report validation error<br/>Stop"]
+    REPORT_ERROR --> END_FAIL([END])
+    CHECK -->|Yes| READ_DRAFT[Read input draft file]
+    READ_DRAFT --> CHECK_RELEVANCE{"Is draft relevant to<br/>this repository?"}
+    CHECK_RELEVANCE -->|No| REPORT_IRRELEVANT["Report: Draft not related to repo<br/>Stop"]
+    REPORT_IRRELEVANT --> END_FAIL
+    CHECK_RELEVANCE -->|Yes| ANALYZE["Analyze draft for:<br/>- Clarity<br/>- Consistency<br/>- Completeness<br/>- Functionality"]
+    ANALYZE --> HAS_ISSUES{Issues found?}
+    HAS_ISSUES -->|Yes| RESOLVE["Engage user to resolve issues<br/>via interactive CLI prompts"]
+    RESOLVE --> ANALYZE
+    HAS_ISSUES -->|No| CHECK_METRICS{"Has quantitative<br/>metrics?"}
+    CHECK_METRICS -->|Yes| CONFIRM_METRICS["Confirm metrics with user:<br/>Hard requirement or trend?"]
+    CONFIRM_METRICS --> GEN_PLAN
+    CHECK_METRICS -->|No| GEN_PLAN["Generate structured plan:<br/>- Goal Description<br/>- Acceptance Criteria with TDD tests<br/>- Path Boundaries<br/>- Feasibility Hints<br/>- Dependencies and Milestones"]
+    GEN_PLAN --> WRITE["Write plan to output file<br/>while preserving the original draft section"]
+    WRITE --> REVIEW["Review complete plan<br/>Check for inconsistencies"]
+    REVIEW --> INCONSISTENT{Inconsistencies?}
+    INCONSISTENT -->|Yes| FIX[Fix inconsistencies]
+    FIX --> REVIEW
+    INCONSISTENT -->|No| CHECK_LANG{"Multiple languages?"}
+    CHECK_LANG -->|Yes| UNIFY[Offer language unification]
+    UNIFY --> REPORT_SUCCESS
+    CHECK_LANG -->|No| REPORT_SUCCESS["Report success:<br/>- Plan path<br/>- AC count<br/>- Language unified?"]
+    REPORT_SUCCESS --> END_SUCCESS([END])
+```
 
-1. IO validation
-2. repository relevance check
-3. draft analysis
-4. interactive clarification when needed
-5. final plan generation
+## Input Requirements
 
-The generated plan preserves the original draft section at the bottom.
+**Required Arguments:**
+- `--input <path/to/draft.md>` - The draft document
+- `--output <path/to/plan.md>` - Where to write the plan
+
+## Plan Structure Output
+
+The generated plan includes:
+
+```markdown
+# Plan Title
+
+## Goal Description
+Clear description of what needs to be accomplished
+
+## Acceptance Criteria
+
+- AC-1: First criterion
+  - Positive Tests (expected to PASS):
+    - Test case that should succeed
+  - Negative Tests (expected to FAIL):
+    - Test case that should fail
+
+## Path Boundaries
+
+### Upper Bound (Maximum Scope)
+Most comprehensive acceptable implementation
+
+### Lower Bound (Minimum Scope)
+Minimum viable implementation
+
+### Allowed Choices
+- Can use: allowed technologies
+- Cannot use: prohibited technologies
+
+## Dependencies and Sequence
+
+### Milestones
+1. Milestone 1: Description
+   - Phase A: ...
+   - Phase B: ...
+
+## Implementation Notes
+- Code should NOT contain plan terminology
+```
+
+## Validation Behavior
+
+`humanize gen-plan` returns a non-zero exit status and prints a descriptive error if any of these checks fail:
+
+- input file not found
+- input file is empty
+- output directory does not exist
+- output file already exists
+- no write permission
+- invalid arguments
+- embedded plan template missing
+
+The command may also stop and ask for clarification or metric classification when the draft needs user input.
+
+## Usage
+
+```bash
+humanize gen-plan --input path/to/draft.md --output path/to/plan.md
+```
