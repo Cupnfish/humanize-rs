@@ -1,4 +1,7 @@
 {
+    "metadata": {
+        "description": "Humanize plugin marketplace for Claude Code and Droid."
+    },
     "name": "humania-rs",
     "owner": {
         "name": "Cupnfish"
@@ -7,8 +10,11 @@
         {
             "description": "Humanize RS - Rust implementation of the Humanize workflow for Claude Code and Droid, with independent Codex review.",
             "name": "humanize-rs",
-            "source": "./",
-            "version": "0.3.4"
+            "source": {
+                "source": "url",
+                "url": "https://github.com/Cupnfish/humanize-rs.git"
+            },
+            "version": "0.3.5"
         }
     ]
 }

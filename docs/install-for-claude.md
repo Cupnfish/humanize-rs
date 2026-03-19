@@ -44,13 +44,6 @@ claude plugin marketplace add https://github.com/Cupnfish/humanize-rs.git
 claude plugin install humanize-rs@humania-rs
 ```
 
-From a local clone for development:
-
-```bash
-claude plugin marketplace add ./
-claude plugin install humanize-rs@humania-rs
-```
-
 ## Version Sync
 
 `humanize init --global` writes a sync stamp under `~/.claude/`.

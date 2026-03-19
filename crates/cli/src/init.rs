@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use crate::InitTarget;
 
 const DEFAULT_PLUGIN_SOURCE: &str = "https://github.com/Cupnfish/humanize-rs.git";
+const MARKETPLACE_NAME: &str = "humania-rs";
 const PLUGIN_NAME: &str = "humanize-rs";
 const LEGACY_CLAUDE_PLUGIN_NAME: &str = "humanize";
 const STAMP_FILE: &str = "humanize-plugin-sync.json";
@@ -152,6 +153,7 @@ fn maybe_warn_target_mismatch(target: InitTarget) -> Result<()> {
 
 fn install_global(target: InitTarget) -> Result<()> {
     let source = detect_plugin_source(target)?;
+    migrate_local_marketplace_install(target, &source)?;
     let marketplace_name = ensure_marketplace(target, &source)?;
     let plugin_spec = format!("{PLUGIN_NAME}@{marketplace_name}");
 
@@ -161,15 +163,18 @@ fn install_global(target: InitTarget) -> Result<()> {
     }
     let existing = plugin_install_status(target)?;
     let previous_stamp = read_stamp(target)?;
-    let action = if existing.installed
-        && existing.version.as_deref() == Some(current_version)
+    let version_matches =
+        existing.installed && existing.version.as_deref() == Some(current_version);
+    let source_matches = stamp_source_matches(previous_stamp.as_ref(), &source);
+    let action = if version_matches
+        && source_matches
         && previous_stamp
             .as_ref()
             .map(|stamp| stamp.cli_version == current_version && stamp.plugin_spec == plugin_spec)
             .unwrap_or(false)
     {
         "already in sync"
-    } else if existing.installed && existing.version.as_deref() == Some(current_version) {
+    } else if version_matches && source_matches {
         "already installed"
     } else {
         ensure_plugin_installed(target, &plugin_spec)?
@@ -515,6 +520,53 @@ fn source_matches(listed_source: &str, desired_source: &str) -> bool {
     listed_source.trim() == desired_source.trim()
 }
 
+fn stamp_source_matches(stamp: Option<&PluginSyncStamp>, source: &str) -> bool {
+    stamp
+        .map(|stamp| source_matches(&stamp.source, source))
+        .unwrap_or(false)
+}
+
+fn migrate_local_marketplace_install(target: InitTarget, desired_source: &str) -> Result<()> {
+    let marketplaces = list_marketplaces(target).unwrap_or_default();
+    let Some(record) = marketplaces
+        .iter()
+        .find(|record| record.name == MARKETPLACE_NAME)
+    else {
+        return Ok(());
+    };
+
+    if source_matches(&record.source, desired_source)
+        || !marketplace_source_is_local(&record.source)
+    {
+        return Ok(());
+    }
+
+    let plugin_spec = format!("{PLUGIN_NAME}@{}", record.name);
+    let uninstall = run_host_command(target, &["plugin", "uninstall", "-s", "user", &plugin_spec])?;
+    if !uninstall.status.success() {
+        let _ = run_host_command(target, &["plugin", "uninstall", "-s", "user", PLUGIN_NAME])?;
+    }
+
+    let remove = run_host_command(target, &["plugin", "marketplace", "remove", &record.name])?;
+    if !remove.status.success() {
+        bail!(
+            "Failed to remove local Humanize marketplace from {}.\n{}",
+            host_display_name(target),
+            render_output(&remove),
+        );
+    }
+
+    Ok(())
+}
+
+fn marketplace_source_is_local(source: &str) -> bool {
+    let trimmed = source.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("local:")
+        || lower.starts_with("directory (")
+        || fs::canonicalize(trimmed).is_ok()
+}
+
 fn github_repo_slug(source: &str) -> Option<String> {
     let trimmed = source.trim().trim_end_matches(".git").trim_end_matches('/');
 
@@ -731,38 +783,8 @@ fn maybe_remove_legacy_claude_user_plugin() -> Result<()> {
     Ok(())
 }
 
-fn detect_plugin_source(target: InitTarget) -> Result<String> {
-    if let Some(source) = std::env::var_os("HUMANIZE_PLUGIN_SOURCE") {
-        return Ok(PathBuf::from(source).display().to_string());
-    }
-
-    if let Some(root) = find_local_plugin_repo() {
-        if let (Ok(canonical_root), Ok(host_dir)) =
-            (fs::canonicalize(&root), resolve_host_dir(target))
-        {
-            if host_dir.starts_with(&canonical_root) {
-                return Ok(DEFAULT_PLUGIN_SOURCE.to_string());
-            }
-        }
-        return Ok(root.display().to_string());
-    }
-
+fn detect_plugin_source(_target: InitTarget) -> Result<String> {
     Ok(DEFAULT_PLUGIN_SOURCE.to_string())
-}
-
-fn find_local_plugin_repo() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    for dir in cwd.ancestors() {
-        if dir
-            .join(".claude-plugin")
-            .join("marketplace.json")
-            .is_file()
-            && dir.join(".claude-plugin").join("plugin.json").is_file()
-        {
-            return Some(dir.to_path_buf());
-        }
-    }
-    None
 }
 
 fn run_host_command(target: InitTarget, args: &[&str]) -> Result<Output> {
@@ -916,6 +938,29 @@ Registered marketplaces:
             "GitHub (Cupnfish/humanize-rs)",
             "https://github.com/Cupnfish/humanize-rs.git"
         ));
+    }
+
+    #[test]
+    fn stamp_source_matches_github_slug() {
+        let stamp = PluginSyncStamp {
+            target: "claude".to_string(),
+            cli_version: "0.3.4".to_string(),
+            plugin_name: PLUGIN_NAME.to_string(),
+            plugin_spec: "humanize-rs@humania-rs".to_string(),
+            marketplace_name: MARKETPLACE_NAME.to_string(),
+            source: "GitHub (Cupnfish/humanize-rs)".to_string(),
+            scope: "user".to_string(),
+            installed_at: "2026-03-19T00:00:00Z".to_string(),
+        };
+        assert!(stamp_source_matches(
+            Some(&stamp),
+            "https://github.com/Cupnfish/humanize-rs.git"
+        ));
+    }
+
+    #[test]
+    fn marketplace_source_is_local_for_claude_directory_entries() {
+        assert!(marketplace_source_is_local("Directory (/tmp/humanize)"));
     }
 
     #[test]
