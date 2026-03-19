@@ -134,6 +134,44 @@ fn gen_plan_blocks_when_noninteractive_clarification_is_required() {
     assert!(stderr.contains("requires user clarification"));
 }
 
+#[test]
+fn gen_plan_prepare_only_writes_template_and_draft_without_codex() {
+    let env = GenPlanEnv::new();
+    fs::write(
+        env.project().join("draft.md"),
+        "# Draft\n\nNeed a parser.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(env.project().join("docs")).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "gen-plan",
+            "--input",
+            "draft.md",
+            "--output",
+            "docs/plan.md",
+            "--prepare-only",
+        ])
+        .env("PATH", env.path_env())
+        .env("CLAUDE_PROJECT_DIR", env.project().display().to_string())
+        .current_dir(env.project())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan = fs::read_to_string(env.project().join("docs/plan.md")).unwrap();
+    assert!(plan.contains("## Goal Description"));
+    assert!(plan.contains("## Acceptance Criteria"));
+    assert!(plan.contains("--- Original Design Draft Start ---"));
+    assert!(plan.contains("Need a parser."));
+}
+
 fn make_executable(path: &Path) {
     #[cfg(unix)]
     {

@@ -7,7 +7,7 @@ hide-from-slash-command-tool: "true"
 
 # Start PR Loop
 
-Execute the native setup command to initialize the PR review loop:
+Execute the setup command to initialize the PR review loop:
 
 ```bash
 humanize setup pr $ARGUMENTS

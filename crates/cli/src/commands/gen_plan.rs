@@ -30,36 +30,28 @@ struct GenPlanMetric {
     suggested_default: String,
 }
 
-pub(super) fn handle_gen_plan(input: &str, output: &str) -> Result<()> {
+struct PreparedGenPlan {
+    project_root: PathBuf,
+    draft: String,
+    template: String,
+    output_path: PathBuf,
+}
+
+pub(super) fn handle_gen_plan(input: &str, output: &str, prepare_only: bool) -> Result<()> {
+    if prepare_only {
+        prepare_gen_plan_output(input, output)?;
+        return Ok(());
+    }
+
     gen_plan_native(input, output)
 }
 
 fn gen_plan_native(input: &str, output: &str) -> Result<()> {
-    let input_path = PathBuf::from(input);
-    let output_path = PathBuf::from(output);
-
-    if !input_path.is_file() {
-        bail!("Input file not found: {}", input_path.display());
-    }
-
-    let draft = fs::read_to_string(&input_path)?;
-    if draft.trim().is_empty() {
-        bail!("Input file is empty: {}", input_path.display());
-    }
-
-    let output_dir = output_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Output directory does not exist"))?;
-    if !output_dir.is_dir() {
-        bail!("Output directory does not exist: {}", output_dir.display());
-    }
-    if output_path.exists() {
-        bail!("Output file already exists: {}", output_path.display());
-    }
-
-    let template = embedded_template_contents("plan/gen-plan-template.md")
-        .context("Plan template file not found")?;
-    let project_root = resolve_project_root()?;
+    let prepared = prepare_gen_plan_output(input, output)?;
+    let project_root = prepared.project_root;
+    let draft = prepared.draft;
+    let template = prepared.template;
+    let output_path = prepared.output_path;
     ensure_command_exists("codex", "Error: gen-plan requires codex to be installed")?;
 
     let mut options = humanize_core::codex::CodexOptions::from_env(&project_root);
@@ -86,7 +78,7 @@ fn gen_plan_native(input: &str, output: &str) -> Result<()> {
     let clarifications = collect_gen_plan_issue_answers(&analysis)?;
     let metric_answers = collect_gen_plan_metric_answers(&analysis)?;
     let prompt = build_gen_plan_generation_prompt(
-        template,
+        &template,
         &draft,
         &repo_context,
         &clarifications,
@@ -112,6 +104,49 @@ fn gen_plan_native(input: &str, output: &str) -> Result<()> {
 
     fs::write(&output_path, format!("{}\n", content.trim_end()))?;
     Ok(())
+}
+
+fn prepare_gen_plan_output(input: &str, output: &str) -> Result<PreparedGenPlan> {
+    let input_path = PathBuf::from(input);
+    let output_path = PathBuf::from(output);
+
+    if !input_path.is_file() {
+        bail!("Input file not found: {}", input_path.display());
+    }
+
+    let draft = fs::read_to_string(&input_path)?;
+    if draft.trim().is_empty() {
+        bail!("Input file is empty: {}", input_path.display());
+    }
+
+    let output_dir = output_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Output directory does not exist"))?;
+    if !output_dir.is_dir() {
+        bail!("Output directory does not exist: {}", output_dir.display());
+    }
+    if output_path.exists() {
+        bail!("Output file already exists: {}", output_path.display());
+    }
+
+    let template = embedded_template_contents("plan/gen-plan-template.md")
+        .context("Plan template file not found")?
+        .to_string();
+    let project_root = resolve_project_root()?;
+
+    let scaffold = format!(
+        "{}\n\n--- Original Design Draft Start ---\n\n{}\n\n--- Original Design Draft End ---\n",
+        template.trim_end(),
+        draft.trim_end()
+    );
+    fs::write(&output_path, scaffold)?;
+
+    Ok(PreparedGenPlan {
+        project_root,
+        draft,
+        template,
+        output_path,
+    })
 }
 
 fn strip_markdown_fence(content: &str) -> String {

@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::IsTerminal;
 
 mod commands;
 mod hook_input;
@@ -83,6 +84,10 @@ enum Commands {
         /// Output plan file
         #[arg(short, long)]
         output: String,
+
+        /// Internal mode: only validate IO and prepare the output scaffold
+        #[arg(long, hide = true)]
+        prepare_only: bool,
     },
 
     /// Install or inspect host plugin integration
@@ -315,7 +320,9 @@ enum GateCommands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if !matches!(cli.command, Commands::Init { .. } | Commands::Doctor { .. }) {
+    if !matches!(cli.command, Commands::Init { .. } | Commands::Doctor { .. })
+        && should_emit_plugin_sync_warnings()
+    {
         init::warn_if_plugin_version_mismatch();
     }
 
@@ -333,7 +340,11 @@ fn main() -> Result<()> {
             effort,
             timeout,
         } => commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout),
-        Commands::GenPlan { input, output } => commands::handle_gen_plan(&input, &output),
+        Commands::GenPlan {
+            input,
+            output,
+            prepare_only,
+        } => commands::handle_gen_plan(&input, &output, prepare_only),
         Commands::Init {
             global,
             target,
@@ -341,5 +352,44 @@ fn main() -> Result<()> {
             uninstall,
         } => init::run(target, global, show, uninstall),
         Commands::Doctor { target } => init::run_doctor(target),
+    }
+}
+
+fn should_emit_plugin_sync_warnings() -> bool {
+    match parse_sync_warning_override(std::env::var("HUMANIZE_SYNC_WARNINGS").ok().as_deref()) {
+        Some(value) => value,
+        None => std::io::stderr().is_terminal(),
+    }
+}
+
+fn parse_sync_warning_override(value: Option<&str>) -> Option<bool> {
+    match value {
+        Some(value) if value.eq_ignore_ascii_case("always") => Some(true),
+        Some(value) if value.eq_ignore_ascii_case("never") => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_warning_override_parses_always() {
+        assert_eq!(parse_sync_warning_override(Some("always")), Some(true));
+        assert_eq!(parse_sync_warning_override(Some("ALWAYS")), Some(true));
+    }
+
+    #[test]
+    fn sync_warning_override_parses_never() {
+        assert_eq!(parse_sync_warning_override(Some("never")), Some(false));
+        assert_eq!(parse_sync_warning_override(Some("NEVER")), Some(false));
+    }
+
+    #[test]
+    fn sync_warning_override_ignores_unknown_values() {
+        assert_eq!(parse_sync_warning_override(Some("auto")), None);
+        assert_eq!(parse_sync_warning_override(Some("unexpected")), None);
+        assert_eq!(parse_sync_warning_override(None), None);
     }
 }

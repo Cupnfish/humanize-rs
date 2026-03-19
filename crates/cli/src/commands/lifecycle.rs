@@ -19,8 +19,11 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/rlcr");
 
-    let loop_dir = humanize_core::state::find_active_loop(&loop_base_dir, None)
-        .ok_or_else(|| anyhow::anyhow!("No active RLCR loop found."))?;
+    let Some(loop_dir) = humanize_core::state::find_active_loop(&loop_base_dir, None) else {
+        println!("NO_LOOP");
+        println!("No active RLCR loop found.");
+        std::process::exit(1);
+    };
 
     let state_file = loop_dir.join("state.md");
     let finalize_state_file = loop_dir.join("finalize-state.md");
@@ -29,7 +32,9 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
     } else if finalize_state_file.exists() {
         finalize_state_file
     } else {
-        bail!("No active RLCR loop found.");
+        println!("NO_ACTIVE_LOOP");
+        println!("No active RLCR loop found. The loop directory exists but no active state file is present.");
+        std::process::exit(1);
     };
 
     let state_content = fs::read_to_string(&active_state).unwrap_or_default();
@@ -57,12 +62,21 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
     }
     humanize_core::state::State::rename_to_terminal(&active_state, "cancel")?;
 
-    println!("CANCELLED");
-    println!(
-        "Cancelled RLCR loop (was at round {} of {}).",
-        state.current_round, state.max_iterations
-    );
-    println!("State preserved as cancel-state.md");
+    if active_state.ends_with("finalize-state.md") {
+        println!("CANCELLED_FINALIZE");
+        println!(
+            "Cancelled RLCR loop during Finalize Phase (was at round {} of {}).",
+            state.current_round, state.max_iterations
+        );
+        println!("State preserved as cancel-state.md");
+    } else {
+        println!("CANCELLED");
+        println!(
+            "Cancelled RLCR loop (was at round {} of {}).",
+            state.current_round, state.max_iterations
+        );
+        println!("State preserved as cancel-state.md");
+    }
     Ok(())
 }
 
@@ -70,10 +84,18 @@ fn cancel_pr_native(_force: bool) -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/pr-loop");
 
-    let loop_dir = newest_active_pr_loop(&loop_base_dir)
-        .ok_or_else(|| anyhow::anyhow!("No active PR loop found."))?;
+    let Some(loop_dir) = newest_active_pr_loop(&loop_base_dir) else {
+        println!("NO_LOOP");
+        println!("No active PR loop found.");
+        std::process::exit(1);
+    };
 
     let state_file = loop_dir.join("state.md");
+    if !state_file.exists() {
+        println!("NO_ACTIVE_LOOP");
+        println!("No active PR loop found. The loop directory exists but no active state file is present.");
+        std::process::exit(1);
+    }
     let state_content = fs::read_to_string(&state_file).unwrap_or_default();
     let state = humanize_core::state::State::from_markdown(&state_content).unwrap_or_default();
 
@@ -94,15 +116,31 @@ fn cancel_pr_native(_force: bool) -> Result<()> {
 fn resume_rlcr_native() -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/rlcr");
-    let loop_dir = humanize_core::state::find_active_loop(&loop_base_dir, None)
-        .ok_or_else(|| anyhow::anyhow!("No active RLCR loop found."))?;
+    let Some(loop_dir) = humanize_core::state::find_active_loop(&loop_base_dir, None) else {
+        println!("NO_LOOP");
+        println!("No active RLCR loop found.");
+        std::process::exit(1);
+    };
 
-    let state_file = humanize_core::state::resolve_active_state_file(&loop_dir)
-        .ok_or_else(|| anyhow::anyhow!("No active RLCR state file found."))?;
-    let state_content = fs::read_to_string(&state_file)
-        .context("Malformed RLCR state file, cannot resume safely")?;
+    let Some(state_file) = humanize_core::state::resolve_active_state_file(&loop_dir) else {
+        println!("NO_ACTIVE_LOOP");
+        println!("No active RLCR state file found.");
+        std::process::exit(1);
+    };
+    let state_content = match fs::read_to_string(&state_file) {
+        Ok(content) => content,
+        Err(_) => {
+            println!("MALFORMED_STATE");
+            println!("Malformed RLCR state file, cannot resume safely");
+            std::process::exit(3);
+        }
+    };
     let mut state = humanize_core::state::State::from_markdown_strict(&state_content)
-        .map_err(|_| anyhow::anyhow!("Malformed RLCR state file, cannot resume safely"))?;
+        .unwrap_or_else(|_| {
+            println!("MALFORMED_STATE");
+            println!("Malformed RLCR state file, cannot resume safely");
+            std::process::exit(3);
+        });
 
     arm_resume_session_handshake(
         &project_root,
@@ -157,17 +195,32 @@ fn resume_rlcr_native() -> Result<()> {
 fn resume_pr_native() -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/pr-loop");
-    let loop_dir = newest_active_pr_loop(&loop_base_dir)
-        .ok_or_else(|| anyhow::anyhow!("No active PR loop found."))?;
+    let Some(loop_dir) = newest_active_pr_loop(&loop_base_dir) else {
+        println!("NO_LOOP");
+        println!("No active PR loop found.");
+        std::process::exit(1);
+    };
 
     let state_file = loop_dir.join("state.md");
     if !state_file.exists() {
-        bail!("No active PR loop state file found.");
+        println!("NO_ACTIVE_LOOP");
+        println!("No active PR loop state file found.");
+        std::process::exit(1);
     }
-    let state_content = fs::read_to_string(&state_file)
-        .context("Malformed PR loop state file, cannot resume safely")?;
+    let state_content = match fs::read_to_string(&state_file) {
+        Ok(content) => content,
+        Err(_) => {
+            println!("MALFORMED_STATE");
+            println!("Malformed PR loop state file, cannot resume safely");
+            std::process::exit(3);
+        }
+    };
     let state = humanize_core::state::State::from_markdown(&state_content)
-        .map_err(|_| anyhow::anyhow!("Malformed PR loop state file, cannot resume safely"))?;
+        .unwrap_or_else(|_| {
+            println!("MALFORMED_STATE");
+            println!("Malformed PR loop state file, cannot resume safely");
+            std::process::exit(3);
+        });
 
     let (phase, action_path, action_content) = pr_resume_action(&loop_dir, &state);
 

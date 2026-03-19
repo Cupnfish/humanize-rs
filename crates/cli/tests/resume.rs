@@ -14,6 +14,38 @@ struct ResumeEnv {
     project_dir: PathBuf,
 }
 
+#[test]
+fn resume_rlcr_without_active_loop_returns_no_loop_token() {
+    let env = ResumeEnv::new();
+
+    let output = env
+        .cmd()
+        .args(["resume", "rlcr"])
+        .current_dir(env.project())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("NO_LOOP"));
+}
+
+#[test]
+fn resume_pr_without_active_loop_returns_no_loop_token() {
+    let env = ResumeEnv::new();
+
+    let output = env
+        .cmd()
+        .args(["resume", "pr"])
+        .current_dir(env.project())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("NO_LOOP"));
+}
+
 impl ResumeEnv {
     fn new() -> Self {
         let tempdir = tempfile::tempdir().unwrap();

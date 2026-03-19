@@ -12,7 +12,7 @@ hide-from-slash-command-tool: "true"
 
 ## Plan Compliance Pre-Check
 
-Before running the native setup command, validate the plan file for compliance. This is a fool-proofing mechanism that catches obviously wrong plan files early.
+Before running the setup command, validate the plan file for compliance. This is a fool-proofing mechanism that catches obviously wrong plan files early.
 
 **Skip this entire pre-check if** any of these conditions are true:
 - `$ARGUMENTS` contains `--skip-impl` (no plan file to validate)
@@ -22,8 +22,8 @@ Before running the native setup command, validate the plan file for compliance. 
 
 Parse `$ARGUMENTS` to find the plan file path:
 - If `--plan-file <path>` is present, use `<path>`
-- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--max-iterations`, `--codex-model`, `--codex-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
-- If no plan file path can be determined, skip the pre-check and let the native setup command handle the error
+- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--codex-model`, `--codex-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
+- If no plan file path can be determined, skip the pre-check and let the setup command handle the error
 
 ### Basic path safety gate
 
@@ -32,11 +32,11 @@ Only proceed with the pre-check if the extracted path meets ALL of these conditi
 - Does not contain parent directory traversal (double dot path components)
 - Contains only safe path characters: letters, digits, hyphen, underscore, dot, and forward slash
 
-If any condition fails, skip the pre-check and let the native setup command handle path validation.
+If any condition fails, skip the pre-check and let the setup command handle path validation.
 
 ### Read and validate plan content
 
-1. Use the Read tool to read the plan file. If the file does not exist or cannot be read, skip the pre-check and let the native setup command handle the error.
+1. Use the Read tool to read the plan file. If the file does not exist or cannot be read, skip the pre-check and let the setup command handle the error.
 
 2. Use the Task tool to invoke the `humanize:plan-compliance-checker` agent (sonnet model):
    ```
@@ -50,7 +50,7 @@ If any condition fails, skip the pre-check and let the native setup command hand
    ```
 
 3. **Parse the result** (fail-closed):
-   - If output contains `PASS`: continue to native setup below
+   - If output contains `PASS`: continue to setup below
    - If output contains `FAIL_RELEVANCE`: report "Plan compliance check failed: the plan does not appear to be related to this repository." Show the reason. **Stop the command.**
    - If output contains `FAIL_BRANCH_SWITCH`: report "Plan compliance check failed: the plan contains branch-switching instructions, which are incompatible with RLCR. The RLCR loop requires the working branch to remain constant across all rounds." Show the details. **Stop the command.**
    - If output contains none of the above (malformed): report "Plan compliance check produced unexpected output. Cannot proceed." **Stop the command.**
@@ -59,7 +59,7 @@ If any condition fails, skip the pre-check and let the native setup command hand
 
 ## Setup
 
-If the pre-check passed (or was skipped), execute the native setup command to initialize the loop:
+If the pre-check passed (or was skipped), execute the setup command to initialize the loop:
 
 ```bash
 humanize setup rlcr $ARGUMENTS

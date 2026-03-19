@@ -82,8 +82,8 @@ pub fn handle_ask_codex(prompt: &str, model: &str, effort: &str, timeout: u64) -
 }
 
 /// Handle gen-plan command.
-pub fn handle_gen_plan(input: &str, output: &str) -> Result<()> {
-    gen_plan::handle_gen_plan(input, output)
+pub fn handle_gen_plan(input: &str, output: &str, prepare_only: bool) -> Result<()> {
+    gen_plan::handle_gen_plan(input, output, prepare_only)
 }
 
 use hook_validation::{
