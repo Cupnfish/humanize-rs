@@ -59,11 +59,17 @@ Automates handling of GitHub PR reviews from remote bots:
 ### 3. Generate Plan - Structured Plan from Draft
 
 Transforms a rough draft document into a structured implementation plan with:
-- Clear goal description
-- Acceptance criteria in AC-X format with TDD-style positive/negative tests
-- Path boundaries (upper/lower bounds, allowed choices)
-- Feasibility hints and conceptual approach
-- Dependencies and milestone sequencing
+- clear goal description
+- acceptance criteria in AC-X format with TDD-style positive/negative tests
+- path boundaries (upper/lower bounds, allowed choices)
+- feasibility hints and conceptual approach
+- dependencies and milestone sequencing
+
+When running inside Claude Code, prefer the `humanize-gen-plan` flow/skill behavior:
+- use `humanize gen-plan --prepare-only` for deterministic validation and scaffold preparation
+- use host reasoning plus AskUserQuestion for clarification and final authoring
+
+The full `humanize gen-plan` command remains available for standalone terminal workflows.
 
 ## Commands Reference
 
@@ -130,56 +136,15 @@ humanize cancel pr
 ### Generate Plan from Draft
 
 ```bash
-humanize gen-plan --input path/to/draft.md --output path/to/plan.md
+humanize gen-plan --prepare-only --input path/to/draft.md --output path/to/plan.md
 ```
 
-This command performs validation, repository relevance checking, draft analysis, clarification and metric confirmation, plan generation, and optional language unification.
+After scaffold preparation, continue with host-driven analysis, clarification, and plan authoring.
 
 ### Ask Codex (One-shot Consultation)
 
 ```bash
 humanize ask-codex [--model MODEL] [--effort EFFORT] [--timeout SECONDS] "your question"
-```
-
-## Plan File Structure
-
-A good plan file should include:
-
-```markdown
-# Plan Title
-
-## Goal Description
-Clear description of what needs to be accomplished
-
-## Acceptance Criteria
-
-- AC-1: First criterion
-  - Positive Tests (expected to PASS):
-    - Test case that should succeed
-  - Negative Tests (expected to FAIL):
-    - Test case that should fail
-
-## Path Boundaries
-
-### Upper Bound (Maximum Scope)
-Most comprehensive acceptable implementation
-
-### Lower Bound (Minimum Scope)
-Minimum viable implementation
-
-### Allowed Choices
-- Can use: technologies, approaches allowed
-- Cannot use: prohibited technologies
-
-## Dependencies and Sequence
-
-### Milestones
-1. Milestone 1: Description
-   - Phase A: ...
-   - Phase B: ...
-
-## Implementation Notes
-- Code should NOT contain plan terminology like "AC-", "Milestone", "Step"
 ```
 
 ## Goal Tracker System
@@ -210,50 +175,3 @@ The RLCR loop uses a Goal Tracker to prevent goal drift:
 - `humanize` - Humanize CLI
 - `codex` - OpenAI Codex CLI (for review)
 - `gh` - GitHub CLI (for PR loop)
-
-## Directory Structure
-
-Humanize stores all data in `.humanize/`:
-
-```
-.humanize/
-├── rlcr/           # RLCR loop data
-│   └── <timestamp>/
-│       ├── state.md
-│       ├── goal-tracker.md
-│       ├── round-N-summary.md
-│       ├── round-N-review-result.md
-│       ├── finalize-state.md
-│       ├── finalize-summary.md
-│       └── complete-state.md
-├── pr-loop/        # PR loop data
-│   └── <timestamp>/
-│       ├── state.md
-│       └── resolution-N.md
-└── skill/          # One-shot skill results
-    └── <timestamp>/
-        ├── input.md
-        ├── output.md
-        └── metadata.md
-```
-
-## Monitoring
-
-Use the built-in monitor commands to track loop progress:
-
-```bash
-humanize monitor rlcr    # Monitor RLCR loop
-humanize monitor pr      # Monitor PR loop
-humanize monitor skill   # Monitor ask-codex invocations
-```
-
-## Exit Codes
-
-### `humanize ask-codex`
-- `0` - Success
-- `1` - Validation or invocation error
-- `124` - Timeout
-- Other - underlying Codex process error
-
-### `humanize gen-plan`
-- Returns a non-zero exit status and prints a descriptive error when validation fails, the draft is unrelated, clarification is required in a non-interactive session, or Codex generation fails
