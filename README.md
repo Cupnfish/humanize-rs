@@ -203,7 +203,7 @@ cargo xtask verify-version-sync
 Once Humanize is installed in Claude Code or Droid, the primary user interface is the host REPL, not the raw CLI.
 The installed host plugin calls `humanize` behind the scenes.
 
-With `humanize init`, both hosts expose the same `/humanize-*` slash commands.
+With `humanize init`, both hosts expose the same `/humanize-rs:*` namespaced slash commands.
 `ask-codex` remains available as a skill.
 
 ### Quick Start
@@ -211,24 +211,24 @@ With `humanize init`, both hosts expose the same `/humanize-*` slash commands.
 Claude Code:
 
 ```bash
-/humanize-gen-plan --input draft.md --output docs/plan.md
-/humanize-start-rlcr-loop docs/plan.md
-/humanize-resume-rlcr-loop
-/humanize-start-pr-loop --claude
-/humanize-resume-pr-loop
-/humanize-cancel-rlcr-loop
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+/humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
+/humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
+/humanize-rs:cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
 Droid:
 
 ```bash
-/humanize-gen-plan --input draft.md --output docs/plan.md
-/humanize-start-rlcr-loop docs/plan.md
-/humanize-resume-rlcr-loop
-/humanize-start-pr-loop --claude
-/humanize-resume-pr-loop
-/humanize-cancel-rlcr-loop
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+/humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
+/humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
+/humanize-rs:cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
@@ -260,15 +260,15 @@ Use `humanize doctor` to inspect:
 
 ### RLCR User Flow
 
-1. In Claude Code or Droid, run `/humanize-gen-plan --input draft.md --output docs/plan.md`.
-2. Run `/humanize-start-rlcr-loop docs/plan.md`.
+1. In Claude Code or Droid, run `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`.
+2. Run `/humanize-rs:start-rlcr-loop docs/plan.md`.
 3. Continue working normally in the host.
 4. When the host stops, Humanize hooks automatically validate state, run Codex review, and decide whether to continue, block, or advance the phase.
 5. Use the monitor from a terminal if you want a live view of the loop state.
 
 If the host session is lost but `.humanize/rlcr/` still exists, resume the loop instead of starting over:
 
-- `/humanize-resume-rlcr-loop`
+- `/humanize-rs:resume-rlcr-loop`
 
 ### Direct CLI Usage
 

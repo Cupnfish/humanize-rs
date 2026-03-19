@@ -94,9 +94,13 @@ fn normalize_command_semantics(content: &str) -> String {
             "The setup script provides the exact mention string to use (e.g., `@claude @codex`).\nUse whatever bot mentions are shown in the initial prompt - they match the flags you provided.",
         )
         .replace("--max-iterations, ", "")
-        .replace("/humanize-cancel-rlcr-loop", "/humanize:cancel-rlcr-loop")
-        .replace("/humanize-cancel-pr-loop", "/humanize:cancel-pr-loop")
-        .replace("/humanize-start-rlcr-loop", "/humanize:start-rlcr-loop")
+        .replace("/humanize-rs:cancel-rlcr-loop", "/humanize:cancel-rlcr-loop")
+        .replace("/humanize-rs:cancel-pr-loop", "/humanize:cancel-pr-loop")
+        .replace("/humanize-rs:start-rlcr-loop", "/humanize:start-rlcr-loop")
+        .replace("/humanize-rs:start-pr-loop", "/humanize:start-pr-loop")
+        .replace("/humanize-rs:resume-rlcr-loop", "/humanize:resume-rlcr-loop")
+        .replace("/humanize-rs:resume-pr-loop", "/humanize:resume-pr-loop")
+        .replace("/humanize-rs:gen-plan", "/humanize:gen-plan")
 }
 
 #[test]

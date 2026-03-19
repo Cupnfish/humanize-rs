@@ -22,4 +22,4 @@ humanize cancel pr
 
 The loop directory with comments, resolution summaries, and state information will be preserved for reference. The command writes `.cancel-requested` and renames `state.md` to `cancel-state.md`.
 
-**Note**: This command only affects PR loops. RLCR loops (.humanize/rlcr/) are not affected. Use `/humanize-cancel-rlcr-loop` to cancel RLCR loops.
+**Note**: This command only affects PR loops. RLCR loops (.humanize/rlcr/) are not affected. Use `/humanize-rs:cancel-rlcr-loop` to cancel RLCR loops.

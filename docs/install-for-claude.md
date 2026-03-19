@@ -28,6 +28,13 @@ This command:
 - installs or updates `humanize-rs` in user scope
 - records the CLI version used for the sync
 
+Because the plugin name is `humanize-rs`, Claude Code exposes namespaced slash commands such as:
+
+```bash
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+/humanize-rs:start-rlcr-loop docs/plan.md
+```
+
 Validate:
 
 ```bash

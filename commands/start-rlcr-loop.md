@@ -107,7 +107,7 @@ This loop uses a **Goal Tracker** to prevent goal drift across iterations:
 
 - Reach the maximum iteration count
 - Codex confirms completion with "COMPLETE", followed by successful code review (no `[P0-9]` issues)
-- User runs `/humanize-cancel-rlcr-loop`
+- User runs `/humanize-rs:cancel-rlcr-loop`
 
 ## Two-Phase System
 
@@ -123,7 +123,7 @@ The `--base-branch` option specifies the base branch for code review comparison.
 Use `--skip-impl` to skip the implementation phase and go directly to code review:
 
 ```bash
-/humanize-start-rlcr-loop --skip-impl
+/humanize-rs:start-rlcr-loop --skip-impl
 ```
 
 In this mode:

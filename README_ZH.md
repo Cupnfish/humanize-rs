@@ -166,7 +166,7 @@ cargo xtask verify-version-sync
 安装到 Claude Code 或 Droid 之后，用户的主要入口应该是宿主里的命令和 skill，而不是直接调用底层 CLI。
 安装好的宿主插件会在后台调用 `humanize`。
 
-用 `humanize init` 安装后，两个宿主都会暴露相同的 `/humanize-*` slash command。
+用 `humanize init` 安装后，两个宿主都会暴露相同的 `/humanize-rs:*` 命名空间 slash command。
 `ask-codex` 仍然作为 skill 可用。
 
 ### 快速开始
@@ -174,24 +174,24 @@ cargo xtask verify-version-sync
 Claude Code：
 
 ```bash
-/humanize-gen-plan --input draft.md --output docs/plan.md
-/humanize-start-rlcr-loop docs/plan.md
-/humanize-resume-rlcr-loop
-/humanize-start-pr-loop --claude
-/humanize-resume-pr-loop
-/humanize-cancel-rlcr-loop
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+/humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
+/humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
+/humanize-rs:cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
 Droid：
 
 ```bash
-/humanize-gen-plan --input draft.md --output docs/plan.md
-/humanize-start-rlcr-loop docs/plan.md
-/humanize-resume-rlcr-loop
-/humanize-start-pr-loop --claude
-/humanize-resume-pr-loop
-/humanize-cancel-rlcr-loop
+/humanize-rs:gen-plan --input draft.md --output docs/plan.md
+/humanize-rs:start-rlcr-loop docs/plan.md
+/humanize-rs:resume-rlcr-loop
+/humanize-rs:start-pr-loop --claude
+/humanize-rs:resume-pr-loop
+/humanize-rs:cancel-rlcr-loop
 /ask-codex Explain the latest review result
 ```
 
@@ -223,15 +223,15 @@ Droid：
 
 ### RLCR 的典型用户流程
 
-1. 在 Claude Code 或 Droid 中运行 `/humanize-gen-plan --input draft.md --output docs/plan.md`
-2. 运行 `/humanize-start-rlcr-loop docs/plan.md`
+1. 在 Claude Code 或 Droid 中运行 `/humanize-rs:gen-plan --input draft.md --output docs/plan.md`
+2. 运行 `/humanize-rs:start-rlcr-loop docs/plan.md`
 3. 之后继续像平常一样在宿主里工作
 4. 每次宿主停止输出时，Humanize hooks 会自动校验状态、触发 Codex review，并决定是继续、阻塞还是推进阶段
 5. 如果你想在终端里实时观察状态，可以额外打开 monitor
 
 如果宿主 session 丢失，但 `.humanize/rlcr/` 还在，不要重新开 loop，直接恢复：
 
-- `/humanize-resume-rlcr-loop`
+- `/humanize-rs:resume-rlcr-loop`
 
 ### 什么时候直接用 CLI
 
