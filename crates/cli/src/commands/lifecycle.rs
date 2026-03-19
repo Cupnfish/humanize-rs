@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn handle_cancel(cmd: CancelCommands) -> Result<()> {
     match cmd {
         CancelCommands::Rlcr { force } => cancel_rlcr_native(force),
-        CancelCommands::Pr => cancel_pr_native(),
+        CancelCommands::Pr { force } => cancel_pr_native(force),
     }
 }
 
@@ -66,7 +66,7 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
     Ok(())
 }
 
-fn cancel_pr_native() -> Result<()> {
+fn cancel_pr_native(_force: bool) -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/pr-loop");
 

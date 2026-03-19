@@ -208,7 +208,11 @@ enum CancelCommands {
     },
 
     /// Cancel an active PR loop
-    Pr,
+    Pr {
+        /// Force cancel. Currently accepted for compatibility and has no additional effect.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
