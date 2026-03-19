@@ -30,7 +30,7 @@ pub(super) struct PrPollOutcome {
     pub(super) active_bots: Vec<String>,
 }
 
-pub(super) fn resolve_project_root() -> Result<PathBuf> {
+pub(crate) fn resolve_project_root() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_PROJECT_DIR") {
         return Ok(PathBuf::from(dir));
     }

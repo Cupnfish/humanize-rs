@@ -87,7 +87,7 @@ enum Commands {
 
     /// Install or inspect host plugin integration
     Init {
-        /// Install into the user's host config directory
+        /// Install into the user's host config directory instead of the current project
         #[arg(short = 'g', long)]
         global: bool,
 

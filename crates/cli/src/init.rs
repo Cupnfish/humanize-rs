@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::InitTarget;
+use crate::{InitTarget, commands::resolve_project_root};
 
 const DEFAULT_PLUGIN_SOURCE: &str = "https://github.com/Cupnfish/humanize-rs.git";
 const MARKETPLACE_NAME: &str = "humania-rs";
@@ -30,12 +31,19 @@ struct PluginSyncStamp {
     installed_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum InstallScope {
+    User,
+    Project,
+}
+
 #[derive(Debug, Clone)]
 struct PluginInstallStatus {
     installed: bool,
     version: Option<String>,
     details: String,
     scope: Option<String>,
+    plugin_id: Option<String>,
     legacy: bool,
 }
 
@@ -48,24 +56,52 @@ struct ClaudePluginRecord {
     project_path: Option<String>,
 }
 
-pub fn run(target: InitTarget, global: bool, show: bool, uninstall: bool) -> Result<()> {
-    if !global {
-        bail!("Only `humanize init --global` is supported right now.");
+#[derive(Debug, Clone)]
+struct HostPluginRecord {
+    id: String,
+    version: Option<String>,
+    scope: String,
+    details: String,
+    legacy: bool,
+}
+
+impl InstallScope {
+    fn from_global(global: bool) -> Self {
+        if global { Self::User } else { Self::Project }
     }
 
+    fn flag(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+        }
+    }
+
+    fn command_flag(self) -> &'static str {
+        match self {
+            Self::User => " --global",
+            Self::Project => "",
+        }
+    }
+}
+
+pub fn run(target: InitTarget, global: bool, show: bool, uninstall: bool) -> Result<()> {
     if show && uninstall {
         bail!("`--show` and `--uninstall` cannot be used together.");
     }
 
+    let scope = InstallScope::from_global(global);
+    let project_root = project_root_for_scope(scope)?;
+
     if show {
-        return show_config(target);
+        return show_config(target, scope, project_root.as_deref());
     }
 
     if uninstall {
-        return uninstall_global(target);
+        return uninstall_plugin(target, scope, project_root.as_deref());
     }
 
-    install_global(target)
+    install_plugin(target, scope, project_root.as_deref())
 }
 
 pub fn warn_if_plugin_version_mismatch() {
@@ -101,38 +137,40 @@ pub fn run_doctor(target: Option<InitTarget>) -> Result<()> {
 
 fn maybe_warn_target_mismatch(target: InitTarget) -> Result<()> {
     let current = current_cli_version().to_string();
-    let stamp = read_stamp(target)?;
-    let install_status = plugin_install_status(target)?;
-
-    if install_status.scope.as_deref() != Some("user") && install_status.installed {
-        eprintln!(
-            "Warning: Humanize {} is currently resolved from {} scope ({}). `humanize init --global{}` only syncs user scope.",
-            host_display_name(target),
-            install_status.scope.as_deref().unwrap_or("unknown"),
-            install_status.details,
-            target_init_suffix(target)
-        );
-    }
+    let project_root = resolve_project_root().ok();
+    let install_status = plugin_install_status(target, project_root.as_deref())?;
+    let stamp = install_status
+        .scope
+        .as_deref()
+        .and_then(scope_from_host_scope)
+        .map(|scope| read_stamp(target, scope, project_root.as_deref()))
+        .transpose()?
+        .flatten();
+    let repair_scope = install_status
+        .scope
+        .as_deref()
+        .and_then(scope_from_host_scope)
+        .unwrap_or(InstallScope::Project);
 
     if let Some(stamp) = stamp.as_ref()
         && stamp.cli_version != current
     {
         eprintln!(
-            "Warning: Humanize {} plugin was synced with CLI {} but current CLI is {}. Run `humanize init --global{}`.",
+            "Warning: Humanize {} plugin was synced with CLI {} but current CLI is {}. Run `{}`.",
             host_display_name(target),
             stamp.cli_version,
             current,
-            target_init_suffix(target)
+            init_command(target, repair_scope)
         );
         return Ok(());
     }
 
     if install_status.legacy {
         eprintln!(
-            "Warning: Humanize {} is using legacy plugin {}. Run `humanize init --global{}` and remove old local/project installs if needed.",
+            "Warning: Humanize {} is using legacy plugin {}. Run `{}`.",
             host_display_name(target),
             install_status.details,
-            target_init_suffix(target)
+            init_command(target, repair_scope)
         );
         return Ok(());
     }
@@ -141,44 +179,55 @@ fn maybe_warn_target_mismatch(target: InitTarget) -> Result<()> {
         && version != current
     {
         eprintln!(
-            "Warning: Humanize {} plugin version is {} but current CLI is {}. Run `humanize init --global{}`.",
+            "Warning: Humanize {} plugin version is {} but current CLI is {}. Run `{}`.",
             host_display_name(target),
             version,
             current,
-            target_init_suffix(target)
+            init_command(target, repair_scope)
         );
     }
     Ok(())
 }
 
-fn install_global(target: InitTarget) -> Result<()> {
+fn install_plugin(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<()> {
     let source = detect_plugin_source(target)?;
-    migrate_local_marketplace_install(target, &source)?;
+    migrate_local_marketplace_install(target, scope, project_root, &source)?;
     let marketplace_name = ensure_marketplace(target, &source)?;
     let plugin_spec = format!("{PLUGIN_NAME}@{marketplace_name}");
 
     let current_version = current_cli_version();
-    if matches!(target, InitTarget::Claude) {
-        maybe_remove_legacy_claude_user_plugin()?;
+    let previous_stamp = read_stamp(target, scope, project_root)?;
+    let existing = plugin_install_status_for_scope(target, scope, project_root)?;
+    let active_project_root = project_root
+        .map(Path::to_path_buf)
+        .or_else(|| resolve_project_root().ok());
+    let resolved = plugin_install_status(target, active_project_root.as_deref())?;
+    let needs_migration =
+        stamp_needs_migration(previous_stamp.as_ref(), scope, &source, &plugin_spec)
+            || existing.legacy
+            || (existing.installed && previous_stamp.is_none())
+            || existing
+                .plugin_id
+                .as_deref()
+                .map(|id| id != plugin_spec)
+                .unwrap_or(false);
+    if needs_migration {
+        clear_scope_install(
+            target,
+            scope,
+            project_root,
+            previous_stamp.as_ref(),
+            &existing,
+        )?;
     }
-    let existing = plugin_install_status(target)?;
-    let previous_stamp = read_stamp(target)?;
-    let version_matches =
-        existing.installed && existing.version.as_deref() == Some(current_version);
-    let source_matches = stamp_source_matches(previous_stamp.as_ref(), &source);
-    let action = if version_matches
-        && source_matches
-        && previous_stamp
-            .as_ref()
-            .map(|stamp| stamp.cli_version == current_version && stamp.plugin_spec == plugin_spec)
-            .unwrap_or(false)
-    {
-        "already in sync"
-    } else if version_matches && source_matches {
-        "already installed"
-    } else {
-        ensure_plugin_installed(target, &plugin_spec)?
-    };
+
+    remove_legacy_plugin(target, scope, project_root)?;
+    let action = ensure_plugin_installed(target, scope, project_root, &plugin_spec)?;
+    let existing = plugin_install_status_for_scope(target, scope, project_root)?;
 
     let stamp = PluginSyncStamp {
         target: target_name(target).to_string(),
@@ -187,10 +236,14 @@ fn install_global(target: InitTarget) -> Result<()> {
         plugin_spec: plugin_spec.clone(),
         marketplace_name: marketplace_name.clone(),
         source: source.clone(),
-        scope: "user".to_string(),
+        scope: scope.flag().to_string(),
         installed_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     };
-    write_stamp(target, &stamp)?;
+    if matches!(target, InitTarget::Claude) {
+        let installed_version = existing.version.as_deref().unwrap_or(current_version);
+        sync_claude_compat_commands(&marketplace_name, installed_version)?;
+    }
+    write_stamp(target, scope, project_root, &stamp)?;
 
     println!(
         "\nHumanize plugin {} for {}.\n",
@@ -201,30 +254,44 @@ fn install_global(target: InitTarget) -> Result<()> {
     println!("  Marketplace: {}", marketplace_name);
     println!("  Plugin:      {}", plugin_spec);
     println!("  CLI Version: {}", current_version);
-    println!("  Scope:       user");
-    if existing.scope.as_deref() != Some("user") && existing.installed {
+    println!("  Scope:       {}", scope.flag());
+    if let Some(project_root) = project_root {
+        println!("  Project:     {}", project_root.display());
+    }
+    if let Some(version) = existing.version.as_deref() {
+        println!("  Installed:   {}", version);
+    }
+    if resolved.scope.as_deref() != Some(scope.flag()) && (resolved.installed || resolved.legacy) {
         println!(
-            "  Note:        A local/project Humanize plugin override may still exist: {}",
-            existing.details
+            "  Note:        Another Humanize plugin may still be taking precedence: {}",
+            resolved.details
         );
     }
     println!(
-        "\n  Restart {}. If you upgrade the CLI later, rerun `humanize init --global{}`.",
+        "\n  Restart {}. If you upgrade the CLI later, rerun `{}`.",
         host_display_name(target),
-        target_init_suffix(target)
+        init_command(target, scope)
     );
 
     Ok(())
 }
 
-fn show_config(target: InitTarget) -> Result<()> {
-    println!("Humanize {} plugin sync:\n", host_display_name(target));
+fn show_config(target: InitTarget, scope: InstallScope, project_root: Option<&Path>) -> Result<()> {
+    println!(
+        "Humanize {} plugin sync ({})\n",
+        host_display_name(target),
+        scope.flag()
+    );
 
     let source = detect_plugin_source(target)?;
     println!("  Preferred Source: {}", source);
     println!("  CLI Version:      {}", current_cli_version());
+    println!("  Scope:            {}", scope.flag());
+    if let Some(project_root) = project_root {
+        println!("  Project Root:     {}", project_root.display());
+    }
 
-    if let Some(stamp) = read_stamp(target)? {
+    if let Some(stamp) = read_stamp(target, scope, project_root)? {
         println!("  Synced Via Init:  yes");
         println!("  Stamp Version:    {}", stamp.cli_version);
         println!("  Marketplace:      {}", stamp.marketplace_name);
@@ -234,21 +301,25 @@ fn show_config(target: InitTarget) -> Result<()> {
         println!("  Synced Via Init:  no");
     }
 
-    if matches!(target, InitTarget::Claude) {
-        if let Some(actual) = claude_installed_plugin_version(PLUGIN_NAME)? {
-            println!("  Installed Plugin: {}", actual);
-        } else {
-            println!("  Installed Plugin: not detected in user scope");
-        }
+    let install_status = plugin_install_status_for_scope(target, scope, project_root)?;
+    if install_status.installed || install_status.legacy {
+        println!("  Installed Plugin: {}", install_status.details);
+    } else {
+        println!("  Installed Plugin: not detected in {} scope", scope.flag());
+    }
+    if install_status.legacy {
+        println!("  Legacy Plugin:    yes");
     }
 
     println!("\nUsage:");
+    println!("  humanize init");
     println!("  humanize init --global");
+    println!("  humanize init --target droid");
     println!("  humanize init --global --target droid");
+    println!("  humanize init --show");
     println!("  humanize init --global --show");
-    println!("  humanize init --global --target droid --show");
+    println!("  humanize init --uninstall");
     println!("  humanize init --global --uninstall");
-    println!("  humanize init --global --target droid --uninstall");
 
     Ok(())
 }
@@ -268,7 +339,8 @@ fn print_target_doctor(target: InitTarget) -> Result<()> {
         None => println!("  Marketplace:      missing for source {}", source),
     }
 
-    let install_status = plugin_install_status(target)?;
+    let project_root = resolve_project_root()?;
+    let install_status = plugin_install_status(target, Some(&project_root))?;
     if install_status.installed {
         println!(
             "  Plugin Installed: yes{}",
@@ -291,90 +363,70 @@ fn print_target_doctor(target: InitTarget) -> Result<()> {
         println!("  Legacy Plugin:    yes");
     }
 
-    let stamp = read_stamp(target)?;
-    match stamp {
-        Some(ref stamp) => {
-            println!("  Sync Stamp:       {}", stamp.cli_version);
-            println!("  Synced At:        {}", stamp.installed_at);
-            println!(
-                "  Version Match:    {}",
-                if stamp.cli_version == current_cli_version() {
-                    "yes"
-                } else {
-                    "no"
-                }
-            );
-        }
-        None => {
-            println!("  Sync Stamp:       missing");
-            println!("  Version Match:    unknown");
-        }
-    }
+    let user_status = plugin_install_status_for_scope(target, InstallScope::User, None)?;
+    let user_stamp = read_stamp(target, InstallScope::User, None)?;
+    let project_status =
+        plugin_install_status_for_scope(target, InstallScope::Project, Some(&project_root))?;
+    let project_stamp = read_stamp(target, InstallScope::Project, Some(&project_root))?;
 
-    let recommendation = if matching_marketplace.is_none() || !install_status.installed {
-        format!(
-            "Run `humanize init --global{}`.",
-            target_init_suffix(target)
-        )
-    } else if stamp
-        .as_ref()
-        .map(|s| s.cli_version.as_str() != current_cli_version())
-        .unwrap_or(true)
-    {
-        format!(
-            "Plugin sync is stale. Run `humanize init --global{}`.",
-            target_init_suffix(target)
-        )
-    } else {
-        "No action needed.".to_string()
-    };
-    println!("  Recommendation:   {}", recommendation);
+    print_scope_doctor(
+        target,
+        InstallScope::Project,
+        Some(&project_root),
+        &project_status,
+        project_stamp.as_ref(),
+    );
+    print_scope_doctor(
+        target,
+        InstallScope::User,
+        None,
+        &user_status,
+        user_stamp.as_ref(),
+    );
 
     Ok(())
 }
 
-fn uninstall_global(target: InitTarget) -> Result<()> {
-    let stamp = read_stamp(target)?;
-    let plugin_spec = stamp
-        .as_ref()
-        .map(|s| s.plugin_spec.as_str())
-        .unwrap_or(PLUGIN_NAME);
-
-    let uninstall = run_host_command(target, &["plugin", "uninstall", "-s", "user", plugin_spec])?;
-    if !uninstall.status.success() {
-        let fallback =
-            run_host_command(target, &["plugin", "uninstall", "-s", "user", PLUGIN_NAME])?;
-        if !fallback.status.success() {
-            bail!(
-                "Failed to uninstall Humanize plugin from {}.\n{}\n{}",
-                host_display_name(target),
-                render_output(&uninstall),
-                render_output(&fallback),
-            );
-        }
-    }
-
-    let stamp_path = stamp_path(target)?;
-    if stamp_path.exists() {
-        fs::remove_file(&stamp_path)
-            .with_context(|| format!("Failed to remove {}", stamp_path.display()))?;
-    }
+fn uninstall_plugin(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<()> {
+    let stamp = read_stamp(target, scope, project_root)?;
+    let existing = plugin_install_status_for_scope(target, scope, project_root)?;
+    clear_scope_install(target, scope, project_root, stamp.as_ref(), &existing)?;
 
     println!(
-        "Humanize plugin uninstalled from {}.\n\n  Restart {} to apply changes.",
+        "Humanize plugin uninstalled from {} {} scope.\n\n  Restart {} to apply changes.",
         host_display_name(target),
+        scope.flag(),
         host_display_name(target)
     );
     Ok(())
 }
 
-fn ensure_plugin_installed(target: InitTarget, plugin_spec: &str) -> Result<&'static str> {
-    let update = run_host_command(target, &["plugin", "update", "-s", "user", plugin_spec])?;
+fn ensure_plugin_installed(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    plugin_spec: &str,
+) -> Result<&'static str> {
+    let update = run_scoped_host_command(
+        target,
+        scope,
+        project_root,
+        &["plugin", "update", "-s", scope.flag(), plugin_spec],
+    )?;
     if update.status.success() {
-        return Ok("updated");
+        return Ok("synced");
     }
 
-    let install = run_host_command(target, &["plugin", "install", "-s", "user", plugin_spec])?;
+    let install = run_scoped_host_command(
+        target,
+        scope,
+        project_root,
+        &["plugin", "install", "-s", scope.flag(), plugin_spec],
+    )?;
     if install.status.success() {
         return Ok("installed");
     }
@@ -455,7 +507,11 @@ fn parse_claude_marketplaces(stdout: &str) -> Vec<MarketplaceRecord> {
 
     for line in stdout.lines() {
         let trimmed = line.trim();
-        if let Some(name) = trimmed.strip_prefix('❯').map(str::trim) {
+        let current = trimmed
+            .strip_prefix('❯')
+            .or_else(|| trimmed.strip_prefix('>'))
+            .map(str::trim);
+        if let Some(name) = current {
             if !name.is_empty() {
                 current_name = Some(name.to_string());
             }
@@ -526,7 +582,27 @@ fn stamp_source_matches(stamp: Option<&PluginSyncStamp>, source: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn migrate_local_marketplace_install(target: InitTarget, desired_source: &str) -> Result<()> {
+fn stamp_needs_migration(
+    stamp: Option<&PluginSyncStamp>,
+    scope: InstallScope,
+    source: &str,
+    plugin_spec: &str,
+) -> bool {
+    stamp
+        .map(|stamp| {
+            stamp.scope != scope.flag()
+                || !stamp_source_matches(Some(stamp), source)
+                || stamp.plugin_spec != plugin_spec
+        })
+        .unwrap_or(false)
+}
+
+fn migrate_local_marketplace_install(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    desired_source: &str,
+) -> Result<()> {
     let marketplaces = list_marketplaces(target).unwrap_or_default();
     let Some(record) = marketplaces
         .iter()
@@ -542,9 +618,19 @@ fn migrate_local_marketplace_install(target: InitTarget, desired_source: &str) -
     }
 
     let plugin_spec = format!("{PLUGIN_NAME}@{}", record.name);
-    let uninstall = run_host_command(target, &["plugin", "uninstall", "-s", "user", &plugin_spec])?;
+    let uninstall = run_scoped_host_command(
+        target,
+        scope,
+        project_root,
+        &["plugin", "uninstall", "-s", scope.flag(), &plugin_spec],
+    )?;
     if !uninstall.status.success() {
-        let _ = run_host_command(target, &["plugin", "uninstall", "-s", "user", PLUGIN_NAME])?;
+        let _ = run_scoped_host_command(
+            target,
+            scope,
+            project_root,
+            &["plugin", "uninstall", "-s", scope.flag(), PLUGIN_NAME],
+        )?;
     }
 
     let remove = run_host_command(target, &["plugin", "marketplace", "remove", &record.name])?;
@@ -600,56 +686,71 @@ fn extract_version_token(line: &str) -> Option<String> {
     None
 }
 
-fn claude_installed_plugin_version(plugin_name: &str) -> Result<Option<String>> {
-    let output = run_host_command(InitTarget::Claude, &["plugin", "list", "--json"])?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let plugins: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("Failed to parse `claude plugin list --json` output")?;
-    let Some(items) = plugins.as_array() else {
-        return Ok(None);
-    };
-
-    for item in items {
-        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(scope) = item.get("scope").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if scope == "user" && id.starts_with(&format!("{plugin_name}@")) {
-            return Ok(item
-                .get("version")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned));
-        }
-    }
-
-    Ok(None)
-}
-
-fn plugin_install_status(target: InitTarget) -> Result<PluginInstallStatus> {
+fn plugin_install_status(
+    target: InitTarget,
+    project_root: Option<&Path>,
+) -> Result<PluginInstallStatus> {
     match target {
-        InitTarget::Claude => claude_plugin_install_status(),
-        InitTarget::Droid => droid_plugin_install_status(),
+        InitTarget::Claude => claude_plugin_install_status(project_root),
+        InitTarget::Droid => droid_plugin_install_status(project_root),
     }
 }
 
-fn claude_plugin_install_status() -> Result<PluginInstallStatus> {
+fn plugin_install_status_for_scope(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<PluginInstallStatus> {
+    let plugins = list_humanize_plugins_in_scope(target, scope, project_root)?;
+    let current = plugins.iter().find(|plugin| !plugin.legacy);
+    let legacy = plugins.iter().find(|plugin| plugin.legacy);
+
+    if let Some(plugin) = current {
+        return Ok(PluginInstallStatus {
+            installed: true,
+            version: plugin.version.clone(),
+            details: plugin.details.clone(),
+            scope: Some(plugin.scope.clone()),
+            plugin_id: Some(plugin.id.clone()),
+            legacy: legacy.is_some(),
+        });
+    }
+
+    if let Some(plugin) = legacy {
+        return Ok(PluginInstallStatus {
+            installed: false,
+            version: plugin.version.clone(),
+            details: plugin.details.clone(),
+            scope: Some(plugin.scope.clone()),
+            plugin_id: Some(plugin.id.clone()),
+            legacy: true,
+        });
+    }
+
+    Ok(PluginInstallStatus {
+        installed: false,
+        version: None,
+        details: format!("not found in {} scope", scope.flag()),
+        scope: None,
+        plugin_id: None,
+        legacy: false,
+    })
+}
+
+fn claude_plugin_install_status(project_root: Option<&Path>) -> Result<PluginInstallStatus> {
     let plugins = claude_plugins()?;
     if plugins.is_empty() {
         return Ok(PluginInstallStatus {
             installed: false,
             version: None,
-            details: "not found in user scope".to_string(),
+            details: "not found in user or project scope".to_string(),
             scope: None,
+            plugin_id: None,
             legacy: false,
         });
     }
 
-    if let Some(active) = active_claude_plugin(&plugins) {
+    if let Some(active) = active_claude_plugin(&plugins, project_root) {
         return Ok(PluginInstallStatus {
             installed: active.id.starts_with(&format!("{PLUGIN_NAME}@")),
             version: Some(active.version.clone()),
@@ -659,6 +760,7 @@ fn claude_plugin_install_status() -> Result<PluginInstallStatus> {
                 .map(|path| format!("{} [{}] {}", active.id, active.scope, path))
                 .unwrap_or_else(|| format!("{} [{}]", active.id, active.scope)),
             scope: Some(active.scope.clone()),
+            plugin_id: Some(active.id.clone()),
             legacy: active
                 .id
                 .starts_with(&format!("{LEGACY_CLAUDE_PLUGIN_NAME}@")),
@@ -668,46 +770,36 @@ fn claude_plugin_install_status() -> Result<PluginInstallStatus> {
     Ok(PluginInstallStatus {
         installed: false,
         version: None,
-        details: "not found in user scope".to_string(),
+        details: "not found in user or project scope".to_string(),
         scope: None,
+        plugin_id: None,
         legacy: false,
     })
 }
 
-fn droid_plugin_install_status() -> Result<PluginInstallStatus> {
-    let output = run_host_command(InitTarget::Droid, &["plugin", "list", "-s", "user"])?;
-    if !output.status.success() {
-        return Ok(PluginInstallStatus {
-            installed: false,
-            version: None,
-            details: "failed to read plugin list".to_string(),
-            scope: None,
-            legacy: false,
-        });
+fn droid_plugin_install_status(project_root: Option<&Path>) -> Result<PluginInstallStatus> {
+    if let Some(project_root) = project_root {
+        let project = plugin_install_status_for_scope(
+            InitTarget::Droid,
+            InstallScope::Project,
+            Some(project_root),
+        )?;
+        if project.installed || project.legacy {
+            return Ok(project);
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("No plugins") {
-            continue;
-        }
-        if trimmed.contains(PLUGIN_NAME) {
-            return Ok(PluginInstallStatus {
-                installed: true,
-                version: extract_version_token(trimmed),
-                details: trimmed.to_string(),
-                scope: Some("user".to_string()),
-                legacy: false,
-            });
-        }
+    let user = plugin_install_status_for_scope(InitTarget::Droid, InstallScope::User, None)?;
+    if user.installed || user.legacy {
+        return Ok(user);
     }
 
     Ok(PluginInstallStatus {
         installed: false,
         version: None,
-        details: "not found in user scope".to_string(),
+        details: "not found in user or project scope".to_string(),
         scope: None,
+        plugin_id: None,
         legacy: false,
     })
 }
@@ -731,8 +823,13 @@ fn claude_plugins() -> Result<Vec<ClaudePluginRecord>> {
     Ok(records)
 }
 
-fn active_claude_plugin<'a>(plugins: &'a [ClaudePluginRecord]) -> Option<&'a ClaudePluginRecord> {
-    let cwd = std::env::current_dir().ok();
+fn active_claude_plugin<'a>(
+    plugins: &'a [ClaudePluginRecord],
+    project_root: Option<&Path>,
+) -> Option<&'a ClaudePluginRecord> {
+    let cwd = project_root
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
 
     let mut scoped = plugins
         .iter()
@@ -767,20 +864,227 @@ fn active_claude_plugin<'a>(plugins: &'a [ClaudePluginRecord]) -> Option<&'a Cla
     scoped.into_iter().find(|plugin| plugin.scope == "user")
 }
 
-fn maybe_remove_legacy_claude_user_plugin() -> Result<()> {
+fn list_humanize_plugins_in_scope(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<Vec<HostPluginRecord>> {
+    match target {
+        InitTarget::Claude => claude_plugins_in_scope(scope, project_root),
+        InitTarget::Droid => droid_plugins_in_scope(scope, project_root),
+    }
+}
+
+fn claude_plugins_in_scope(
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<Vec<HostPluginRecord>> {
+    let mut records = Vec::new();
     for plugin in claude_plugins()? {
-        if plugin.scope == "user"
-            && plugin
+        let id_matches = plugin.id.starts_with(&format!("{PLUGIN_NAME}@"))
+            || plugin
                 .id
-                .starts_with(&format!("{LEGACY_CLAUDE_PLUGIN_NAME}@"))
+                .starts_with(&format!("{LEGACY_CLAUDE_PLUGIN_NAME}@"));
+        if !id_matches || !scope_matches(&plugin.scope, scope) {
+            continue;
+        }
+
+        if scope == InstallScope::Project
+            && !project_root_matches(project_root, plugin.project_path.as_deref())
         {
-            let _ = run_host_command(
-                InitTarget::Claude,
-                &["plugin", "uninstall", "-s", "user", &plugin.id],
-            )?;
+            continue;
+        }
+
+        let details = plugin
+            .project_path
+            .as_ref()
+            .map(|path| format!("{} [{}] {}", plugin.id, plugin.scope, path))
+            .unwrap_or_else(|| format!("{} [{}]", plugin.id, plugin.scope));
+        records.push(HostPluginRecord {
+            id: plugin.id.clone(),
+            version: Some(plugin.version.clone()),
+            scope: plugin.scope.clone(),
+            details,
+            legacy: plugin
+                .id
+                .starts_with(&format!("{LEGACY_CLAUDE_PLUGIN_NAME}@")),
+        });
+    }
+    Ok(records)
+}
+
+fn droid_plugins_in_scope(
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<Vec<HostPluginRecord>> {
+    let output = run_scoped_host_command(
+        InitTarget::Droid,
+        scope,
+        project_root,
+        &["plugin", "list", "-s", scope.flag()],
+    )?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut records = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("No plugins")
+            || trimmed.starts_with("Installed plugins:")
+        {
+            continue;
+        }
+
+        let id = trimmed.split_whitespace().next().unwrap_or_default();
+        if id.is_empty()
+            || (!id.starts_with(PLUGIN_NAME) && !id.starts_with(LEGACY_CLAUDE_PLUGIN_NAME))
+        {
+            continue;
+        }
+
+        records.push(HostPluginRecord {
+            id: id.to_string(),
+            version: extract_version_token(trimmed),
+            scope: scope.flag().to_string(),
+            details: trimmed.to_string(),
+            legacy: id.starts_with(LEGACY_CLAUDE_PLUGIN_NAME),
+        });
+    }
+
+    Ok(records)
+}
+
+fn remove_legacy_plugin(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<()> {
+    for plugin in list_humanize_plugins_in_scope(target, scope, project_root)? {
+        if !plugin.legacy {
+            continue;
+        }
+        let uninstall = run_scoped_host_command(
+            target,
+            scope,
+            project_root,
+            &["plugin", "uninstall", "-s", scope.flag(), &plugin.id],
+        )?;
+        if uninstall.status.success() {
+            continue;
+        }
+
+        let fallback = run_scoped_host_command(
+            target,
+            scope,
+            project_root,
+            &[
+                "plugin",
+                "uninstall",
+                "-s",
+                scope.flag(),
+                LEGACY_CLAUDE_PLUGIN_NAME,
+            ],
+        )?;
+        if !fallback.status.success() {
+            bail!(
+                "Failed to remove legacy Humanize plugin from {} {} scope.\n{}\n{}",
+                host_display_name(target),
+                scope.flag(),
+                render_output(&uninstall),
+                render_output(&fallback),
+            );
         }
     }
+
     Ok(())
+}
+
+fn clear_scope_install(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    stamp: Option<&PluginSyncStamp>,
+    existing: &PluginInstallStatus,
+) -> Result<()> {
+    let installed_plugins = list_humanize_plugins_in_scope(target, scope, project_root)?;
+    let mut candidates = Vec::new();
+
+    if let Some(stamp) = stamp {
+        push_candidate(&mut candidates, stamp.plugin_spec.clone());
+        push_candidate(&mut candidates, stamp.plugin_name.clone());
+    }
+    if let Some(plugin_id) = existing.plugin_id.as_ref() {
+        push_candidate(&mut candidates, plugin_id.clone());
+    }
+    for plugin in installed_plugins.iter() {
+        push_candidate(&mut candidates, plugin.id.clone());
+    }
+    push_candidate(&mut candidates, PLUGIN_NAME.to_string());
+    push_candidate(&mut candidates, LEGACY_CLAUDE_PLUGIN_NAME.to_string());
+
+    let mut attempts = Vec::new();
+    let mut removed = false;
+    for candidate in candidates {
+        let output = run_scoped_host_command(
+            target,
+            scope,
+            project_root,
+            &["plugin", "uninstall", "-s", scope.flag(), &candidate],
+        )?;
+        if output.status.success() {
+            removed = true;
+            continue;
+        }
+        attempts.push(render_output(&output));
+    }
+
+    if removed || (!existing.installed && !existing.legacy && installed_plugins.is_empty()) {
+        remove_stamp_file(target, scope, project_root)?;
+        return Ok(());
+    }
+
+    bail!(
+        "Failed to uninstall Humanize plugin from {} {} scope.\n{}",
+        host_display_name(target),
+        scope.flag(),
+        attempts.join("\n"),
+    );
+}
+
+fn push_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if candidate.is_empty() || candidates.iter().any(|item| item == &candidate) {
+        return;
+    }
+    candidates.push(candidate);
+}
+
+fn scope_matches(host_scope: &str, expected: InstallScope) -> bool {
+    match expected {
+        InstallScope::User => host_scope == "user",
+        InstallScope::Project => matches!(host_scope, "project" | "local"),
+    }
+}
+
+fn project_root_matches(project_root: Option<&Path>, configured_path: Option<&str>) -> bool {
+    let Some(project_root) = project_root else {
+        return false;
+    };
+    let Some(configured_path) = configured_path else {
+        return false;
+    };
+
+    let configured = Path::new(configured_path);
+    if configured == project_root {
+        return true;
+    }
+
+    match (fs::canonicalize(project_root), fs::canonicalize(configured)) {
+        (Ok(lhs), Ok(rhs)) => lhs == rhs,
+        _ => false,
+    }
 }
 
 fn detect_plugin_source(_target: InitTarget) -> Result<String> {
@@ -788,10 +1092,241 @@ fn detect_plugin_source(_target: InitTarget) -> Result<String> {
 }
 
 fn run_host_command(target: InitTarget, args: &[&str]) -> Result<Output> {
-    Command::new(host_binary(target))
-        .args(args)
+    run_host_command_in_dir(target, args, None)
+}
+
+fn run_scoped_host_command(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    args: &[&str],
+) -> Result<Output> {
+    let current_dir = match scope {
+        InstallScope::User => None,
+        InstallScope::Project => Some(
+            project_root.context("Project root required for project-scoped plugin operation")?,
+        ),
+    };
+    run_host_command_in_dir(target, args, current_dir)
+}
+
+fn run_host_command_in_dir(
+    target: InitTarget,
+    args: &[&str],
+    current_dir: Option<&Path>,
+) -> Result<Output> {
+    let mut command = Command::new(host_binary(target));
+    command.args(args);
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    command
         .output()
         .with_context(|| format!("Failed to run `{}`", shell_preview(target, args)))
+}
+
+fn project_root_for_scope(scope: InstallScope) -> Result<Option<PathBuf>> {
+    match scope {
+        InstallScope::User => Ok(None),
+        InstallScope::Project => Ok(Some(resolve_project_root()?)),
+    }
+}
+
+fn init_command(target: InitTarget, scope: InstallScope) -> String {
+    format!(
+        "humanize init{}{}",
+        scope.command_flag(),
+        target_init_suffix(target)
+    )
+}
+
+fn scope_from_host_scope(scope: &str) -> Option<InstallScope> {
+    match scope {
+        "user" => Some(InstallScope::User),
+        "project" | "local" => Some(InstallScope::Project),
+        _ => None,
+    }
+}
+
+fn print_scope_doctor(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    install_status: &PluginInstallStatus,
+    stamp: Option<&PluginSyncStamp>,
+) {
+    let label = match scope {
+        InstallScope::User => "User",
+        InstallScope::Project => "Project",
+    };
+
+    if let Some(project_root) = project_root {
+        println!("  {label} Root:      {}", project_root.display());
+    }
+    if install_status.installed {
+        println!(
+            "  {label} Plugin:    yes{}",
+            install_status
+                .version
+                .as_ref()
+                .map(|version| format!(" ({version})"))
+                .unwrap_or_default()
+        );
+    } else {
+        println!("  {label} Plugin:    no");
+    }
+    if install_status.installed || install_status.legacy {
+        println!("  {label} Detail:    {}", install_status.details);
+    }
+    if install_status.legacy {
+        println!("  {label} Legacy:    yes");
+    }
+
+    match stamp {
+        Some(stamp) => {
+            println!("  {label} Stamp:     {}", stamp.cli_version);
+            println!("  {label} Synced At: {}", stamp.installed_at);
+        }
+        None => println!("  {label} Stamp:     missing"),
+    }
+
+    println!(
+        "  {label} Action:    {}",
+        scope_recommendation(target, scope, install_status, stamp)
+    );
+}
+
+fn scope_recommendation(
+    target: InitTarget,
+    scope: InstallScope,
+    install_status: &PluginInstallStatus,
+    stamp: Option<&PluginSyncStamp>,
+) -> String {
+    if install_status.legacy {
+        return format!(
+            "Run `{}` to replace the legacy plugin.",
+            init_command(target, scope)
+        );
+    }
+
+    if !install_status.installed {
+        return format!("Run `{}`.", init_command(target, scope));
+    }
+
+    if stamp
+        .map(|stamp| {
+            stamp.cli_version != current_cli_version()
+                || stamp.scope != scope.flag()
+                || stamp.plugin_name != PLUGIN_NAME
+        })
+        .unwrap_or(true)
+    {
+        return format!(
+            "Run `{}` to refresh the install.",
+            init_command(target, scope)
+        );
+    }
+
+    "No action needed.".to_string()
+}
+
+fn remove_stamp_file(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<()> {
+    let path = stamp_path(target, scope, project_root)?;
+    if path.exists() {
+        fs::remove_file(&path).with_context(|| format!("Failed to remove {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn stamp_path(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<PathBuf> {
+    match scope {
+        InstallScope::User => Ok(resolve_host_dir(target)?.join(STAMP_FILE)),
+        InstallScope::Project => Ok(project_root
+            .context("Project root required for local install")?
+            .join(".humanize")
+            .join(STAMP_FILE)),
+    }
+}
+
+fn read_stamp(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+) -> Result<Option<PluginSyncStamp>> {
+    let path = stamp_path(target, scope, project_root)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let stamp = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(Some(stamp))
+}
+
+fn write_stamp(
+    target: InitTarget,
+    scope: InstallScope,
+    project_root: Option<&Path>,
+    stamp: &PluginSyncStamp,
+) -> Result<()> {
+    let path = stamp_path(target, scope, project_root)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    let content =
+        serde_json::to_string_pretty(stamp).context("Failed to serialize plugin sync stamp")?;
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
+}
+
+fn sync_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<()> {
+    let host_dir = resolve_host_dir(InitTarget::Claude)?;
+    let source_dir = host_dir
+        .join("plugins")
+        .join("cache")
+        .join(marketplace_name)
+        .join(PLUGIN_NAME)
+        .join(version)
+        .join("commands");
+    if !source_dir.is_dir() {
+        bail!(
+            "Claude plugin commands were not found at {} after install.",
+            source_dir.display()
+        );
+    }
+
+    let destination_dir = host_dir.join("commands");
+    fs::create_dir_all(&destination_dir)
+        .with_context(|| format!("Failed to create {}", destination_dir.display()))?;
+
+    for entry in fs::read_dir(&source_dir)
+        .with_context(|| format!("Failed to read {}", source_dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("Failed to read {}", source_dir.display()))?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let destination = destination_dir.join(format!("humanize-{}", file_name.to_string_lossy()));
+        let contents =
+            fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+        fs::write(&destination, contents)
+            .with_context(|| format!("Failed to write {}", destination.display()))?;
+    }
+
+    Ok(())
 }
 
 fn render_output(output: &Output) -> String {
@@ -814,7 +1349,8 @@ fn render_output(output: &Output) -> String {
 }
 
 fn shell_preview(target: InitTarget, args: &[&str]) -> String {
-    let mut parts = vec![host_binary(target).to_string()];
+    let binary = host_binary(target);
+    let mut parts = vec![binary.to_string_lossy().into_owned()];
     parts.extend(args.iter().map(|arg| (*arg).to_string()));
     parts.join(" ")
 }
@@ -841,38 +1377,15 @@ fn resolve_host_dir(target: InitTarget) -> Result<PathBuf> {
         .context("Cannot determine home directory.")
 }
 
-fn stamp_path(target: InitTarget) -> Result<PathBuf> {
-    Ok(resolve_host_dir(target)?.join(STAMP_FILE))
-}
-
-fn read_stamp(target: InitTarget) -> Result<Option<PluginSyncStamp>> {
-    let path = stamp_path(target)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let stamp = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
-    Ok(Some(stamp))
-}
-
-fn write_stamp(target: InitTarget, stamp: &PluginSyncStamp) -> Result<()> {
-    let path = stamp_path(target)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    let content =
-        serde_json::to_string_pretty(stamp).context("Failed to serialize plugin sync stamp")?;
-    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
-}
-
-fn host_binary(target: InitTarget) -> &'static str {
-    match target {
-        InitTarget::Claude => "claude",
-        InitTarget::Droid => "droid",
-    }
+fn host_binary(target: InitTarget) -> OsString {
+    let env_key = match target {
+        InitTarget::Claude => "HUMANIZE_CLAUDE_BIN",
+        InitTarget::Droid => "HUMANIZE_DROID_BIN",
+    };
+    std::env::var_os(env_key).unwrap_or_else(|| match target {
+        InitTarget::Claude => OsString::from("claude"),
+        InitTarget::Droid => OsString::from("droid"),
+    })
 }
 
 fn host_display_name(target: InitTarget) -> &'static str {
@@ -916,6 +1429,26 @@ Configured marketplaces:
         assert_eq!(marketplaces[0].name, "humania-rs");
         assert!(marketplaces[0].source.contains("/tmp/humanize"));
         assert_eq!(marketplaces[1].name, "remote");
+    }
+
+    #[test]
+    fn parse_claude_marketplaces_extracts_windows_style_entries() {
+        let output = r#"
+Configured marketplaces:
+
+  > claude-plugins-official
+    Source: GitHub (anthropics/claude-plugins-official)
+
+  > humania-rs
+    Source: Git (https://github.com/Cupnfish/humanize-rs.git)
+"#;
+        let marketplaces = parse_claude_marketplaces(output);
+        assert_eq!(marketplaces.len(), 2);
+        assert_eq!(marketplaces[0].name, "claude-plugins-official");
+        assert_eq!(
+            marketplaces[1].source,
+            "Git (https://github.com/Cupnfish/humanize-rs.git)"
+        );
     }
 
     #[test]
@@ -989,9 +1522,52 @@ Registered marketplaces:
         );
     }
 
+    #[test]
+    fn stamp_needs_migration_when_scope_changes() {
+        let stamp = PluginSyncStamp {
+            target: "claude".to_string(),
+            cli_version: "0.3.5".to_string(),
+            plugin_name: PLUGIN_NAME.to_string(),
+            plugin_spec: "humanize-rs@humania-rs".to_string(),
+            marketplace_name: MARKETPLACE_NAME.to_string(),
+            source: DEFAULT_PLUGIN_SOURCE.to_string(),
+            scope: "user".to_string(),
+            installed_at: "2026-03-19T00:00:00Z".to_string(),
+        };
+
+        assert!(stamp_needs_migration(
+            Some(&stamp),
+            InstallScope::Project,
+            DEFAULT_PLUGIN_SOURCE,
+            "humanize-rs@humania-rs"
+        ));
+        assert!(!stamp_needs_migration(
+            Some(&stamp),
+            InstallScope::User,
+            DEFAULT_PLUGIN_SOURCE,
+            "humanize-rs@humania-rs"
+        ));
+    }
+
+    #[test]
+    fn project_stamp_path_uses_humanize_directory() {
+        let root = Path::new("/tmp/example-project");
+        let path = stamp_path(InitTarget::Claude, InstallScope::Project, Some(root)).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/example-project/.humanize/humanize-plugin-sync.json")
+        );
+    }
+
     #[cfg(unix)]
     fn exit_status(code: i32) -> std::process::ExitStatus {
         use std::os::unix::process::ExitStatusExt;
         std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code as u32)
     }
 }

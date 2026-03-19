@@ -10,6 +10,8 @@ mod pr;
 mod setup;
 mod stop;
 
+pub(crate) use pr::resolve_project_root;
+
 use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
