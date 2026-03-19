@@ -241,7 +241,7 @@ fn install_plugin(
     };
     if matches!(target, InitTarget::Claude) {
         let installed_version = existing.version.as_deref().unwrap_or(current_version);
-        sync_claude_compat_commands(&marketplace_name, installed_version)?;
+        remove_claude_compat_commands(&marketplace_name, installed_version)?;
     }
     write_stamp(target, scope, project_root, &stamp)?;
 
@@ -1289,7 +1289,7 @@ fn write_stamp(
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
 }
 
-fn sync_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<()> {
+fn remove_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<()> {
     let host_dir = resolve_host_dir(InitTarget::Claude)?;
     let source_dir = host_dir
         .join("plugins")
@@ -1299,15 +1299,13 @@ fn sync_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<
         .join(version)
         .join("commands");
     if !source_dir.is_dir() {
-        bail!(
-            "Claude plugin commands were not found at {} after install.",
-            source_dir.display()
-        );
+        return Ok(());
     }
 
     let destination_dir = host_dir.join("commands");
-    fs::create_dir_all(&destination_dir)
-        .with_context(|| format!("Failed to create {}", destination_dir.display()))?;
+    if !destination_dir.is_dir() {
+        return Ok(());
+    }
 
     for entry in fs::read_dir(&source_dir)
         .with_context(|| format!("Failed to read {}", source_dir.display()))?
@@ -1320,10 +1318,10 @@ fn sync_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<
 
         let file_name = entry.file_name();
         let destination = destination_dir.join(format!("humanize-{}", file_name.to_string_lossy()));
-        let contents =
-            fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-        fs::write(&destination, contents)
-            .with_context(|| format!("Failed to write {}", destination.display()))?;
+        if destination.exists() {
+            fs::remove_file(&destination)
+                .with_context(|| format!("Failed to remove {}", destination.display()))?;
+        }
     }
 
     Ok(())

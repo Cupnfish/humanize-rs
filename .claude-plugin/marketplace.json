@@ -14,7 +14,7 @@
                 "source": "url",
                 "url": "https://github.com/Cupnfish/humanize-rs.git"
             },
-            "version": "0.3.7"
+            "version": "0.3.8"
         }
     ]
 }

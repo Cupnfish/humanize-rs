@@ -185,8 +185,7 @@ fn init_global_replaces_legacy_claude_plugin_and_doctor_sees_marketplace() {
     assert!(doctor_stdout.contains("User Plugin:    yes"));
     assert!(doctor_stdout.contains("User Action:    No action needed."));
 
-    let compat = fs::read_to_string(env.compat_command("humanize-gen-plan.md")).unwrap();
-    assert!(compat.contains(&format!("MOCK gen-plan {}", current_version)));
+    assert!(!env.compat_command("humanize-gen-plan.md").exists());
 }
 
 #[test]
@@ -227,8 +226,7 @@ fn init_project_scope_writes_project_stamp_and_refreshes_compat_commands() {
         Some(current_version)
     );
 
-    let compat = fs::read_to_string(env.compat_command("humanize-gen-plan.md")).unwrap();
-    assert!(compat.contains(&format!("MOCK gen-plan {}", current_version)));
+    assert!(!env.compat_command("humanize-gen-plan.md").exists());
 }
 
 fn mock_claude_script() -> String {
