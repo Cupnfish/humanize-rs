@@ -48,6 +48,12 @@ fn handle_stop_rlcr() -> Result<()> {
     let mut state = humanize_core::state::State::from_markdown_strict(&state_content)
         .map_err(|_| anyhow::anyhow!("Malformed state file, blocking operation for safety"))?;
 
+    if state.base_branch.is_empty() {
+        let reason = "State file missing base_branch value. This indicates the loop was started with an older version of humanize.\n\n\
+                     Options:\n1. Cancel the loop: /humanize:cancel-rlcr-loop\n2. Update humanize and restart the loop";
+        return emit_stop_block(reason, Some("Loop: Blocked - state schema outdated (missing base_branch)"));
+    }
+
     if let Some(reason) = validate_plan_state_schema(&state_content) {
         return emit_stop_block(&reason, Some("Loop: Blocked - state schema outdated"));
     }
