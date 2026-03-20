@@ -4,6 +4,13 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Clone, Debug, ValueEnum)]
+enum PlanLockArg {
+    Snapshot,
+    SourceClean,
+    SourceImmutable,
+}
 use std::io::IsTerminal;
 
 mod commands;
@@ -131,6 +138,10 @@ enum SetupCommands {
         /// Require the plan file to remain tracked in git
         #[arg(long)]
         track_plan_file: bool,
+
+        /// Plan source lock mode for the RLCR session
+        #[arg(long, value_enum, default_value = "snapshot")]
+        plan_lock: PlanLockArg,
 
         /// Maximum iterations
         #[arg(

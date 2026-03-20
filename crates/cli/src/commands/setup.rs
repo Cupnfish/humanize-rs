@@ -1,11 +1,13 @@
 use super::pr::*;
 use super::*;
+use humanize_core::state::PlanMode;
 
 #[derive(Debug, Clone)]
 struct SetupRlcrOptions {
     positional_plan_file: Option<String>,
     explicit_plan_file: Option<String>,
     track_plan_file: bool,
+    plan_lock: crate::PlanLockArg,
     max_iterations: u32,
     base_branch: Option<String>,
     codex_model: String,
@@ -32,6 +34,7 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
             plan_file,
             plan_file_explicit,
             track_plan_file,
+            plan_lock,
             max_iterations,
             base_branch,
             codex_model,
@@ -45,6 +48,7 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
             positional_plan_file: plan_file,
             explicit_plan_file: plan_file_explicit,
             track_plan_file,
+            plan_lock,
             max_iterations,
             base_branch,
             codex_model,
@@ -106,19 +110,40 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let loop_dir = loop_base_dir.join(&timestamp);
     fs::create_dir_all(&loop_dir)?;
 
-    let skip_impl_no_plan = chosen_plan.is_none();
     let mut line_count = 0usize;
+    let plan_mode = plan_lock_mode(&options.plan_lock, options.track_plan_file);
+    let snapshot_plan_path = format!(".humanize/rlcr/{}/plan.md", timestamp);
 
-    let state_plan_file = if let Some(plan_file) = chosen_plan.clone() {
-        let validation =
-            validate_setup_plan_file(&project_root, &plan_file, options.track_plan_file)?;
+    let (
+        state_plan_file,
+        plan_source_path,
+        plan_source_exists_at_start,
+        plan_source_tracked_at_start,
+        plan_source_sha256,
+        plan_source_git_oid,
+    ) = if let Some(plan_file) = chosen_plan.clone() {
+        let validation = validate_setup_plan_file(&project_root, &plan_file, &plan_mode)?;
         line_count = validation.line_count;
         create_plan_backup(&validation.full_path, &loop_dir.join("plan.md"))?;
-        plan_file
+        (
+            plan_file.clone(),
+            plan_file,
+            true,
+            validation.tracked,
+            validation.source_sha256,
+            validation.source_git_oid,
+        )
     } else {
         let placeholder = loop_dir.join("plan.md");
         fs::write(&placeholder, skip_impl_plan_placeholder())?;
-        format!(".humanize/rlcr/{}/plan.md", timestamp)
+        (
+            snapshot_plan_path.clone(),
+            snapshot_plan_path.clone(),
+            true,
+            false,
+            String::new(),
+            None,
+        )
     };
 
     let base_branch = detect_base_branch(&project_root, options.base_branch.as_deref())?;
@@ -126,11 +151,14 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
 
     let state = humanize_core::state::State::new_rlcr(
         state_plan_file.clone(),
-        if skip_impl_no_plan {
-            false
-        } else {
-            options.track_plan_file
-        },
+        matches!(plan_mode, PlanMode::SourceImmutable),
+        plan_mode,
+        plan_source_path,
+        plan_source_exists_at_start,
+        plan_source_tracked_at_start,
+        plan_source_sha256,
+        snapshot_plan_path,
+        plan_source_git_oid,
         start_branch.clone(),
         base_branch.clone(),
         base_commit.clone(),
@@ -382,12 +410,27 @@ fn parse_model_and_effort(spec: &str, default_effort: &str) -> (String, String) 
 struct ValidatedPlan {
     full_path: PathBuf,
     line_count: usize,
+    tracked: bool,
+    source_sha256: String,
+    source_git_oid: Option<String>,
+}
+
+fn plan_lock_mode(arg: &crate::PlanLockArg, track_plan_file: bool) -> PlanMode {
+    if track_plan_file {
+        PlanMode::SourceImmutable
+    } else {
+        match arg {
+            crate::PlanLockArg::Snapshot => PlanMode::Snapshot,
+            crate::PlanLockArg::SourceClean => PlanMode::SourceClean,
+            crate::PlanLockArg::SourceImmutable => PlanMode::SourceImmutable,
+        }
+    }
 }
 
 fn validate_setup_plan_file(
     project_root: &Path,
     plan_file: &str,
-    track_plan_file: bool,
+    plan_mode: &PlanMode,
 ) -> Result<ValidatedPlan> {
     if Path::new(plan_file).is_absolute() {
         bail!(
@@ -474,21 +517,55 @@ fn validate_setup_plan_file(
         .map_err(|e| anyhow::anyhow!("Error: {:?}", e))?;
     let plan_status = git_path_status_porcelain(project_root, plan_file)
         .map_err(|e| anyhow::anyhow!("Error: {:?}", e))?;
-    if track_plan_file {
-        if !tracked {
-            bail!("Error: --track-plan-file requires plan file to be tracked in git");
+    match plan_mode {
+        PlanMode::Snapshot => {}
+        PlanMode::SourceClean => {
+            if tracked && !plan_status.trim().is_empty() {
+                bail!("Error: --plan-lock source-clean requires tracked plan file to be clean (no modifications)");
+            }
         }
-        if !plan_status.trim().is_empty() {
-            bail!("Error: --track-plan-file requires plan file to be clean (no modifications)");
+        PlanMode::SourceImmutable => {
+            if !tracked {
+                bail!("Error: --plan-lock source-immutable requires plan file to be tracked in git");
+            }
+            if !plan_status.trim().is_empty() {
+                bail!("Error: --plan-lock source-immutable requires plan file to be clean (no modifications)");
+            }
         }
-    } else if tracked {
-        bail!("Error: Plan file must be gitignored when not using --track-plan-file");
     }
+
+    let source_sha256 = sha256_hex(content.as_bytes());
+    let source_git_oid = if tracked {
+        git_blob_oid(project_root, plan_file)?
+    } else {
+        None
+    };
 
     Ok(ValidatedPlan {
         full_path,
         line_count,
+        tracked,
+        source_sha256,
+        source_git_oid,
     })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn git_blob_oid(project_root: &Path, plan_file: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["-C", project_root.to_str().unwrap_or(".")])
+        .args(["rev-parse", &format!("HEAD:{}", plan_file)])
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
 }
 
 fn detect_base_branch(project_root: &Path, requested: Option<&str>) -> Result<String> {
@@ -559,14 +636,7 @@ fn git_rev_parse(project_root: &Path, rev: &str) -> Result<String> {
 }
 
 fn create_plan_backup(source: &Path, target: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(source, target)?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::copy(source, target)?;
-    }
+    fs::copy(source, target)?;
     Ok(())
 }
 

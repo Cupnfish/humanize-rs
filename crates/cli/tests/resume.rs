@@ -77,6 +77,13 @@ fn resume_rlcr_replays_prompt_and_arms_session_handshake() {
     let mut state = State::new_rlcr(
         "docs/plan.md".to_string(),
         false,
+        humanize_core::state::PlanMode::Snapshot,
+        "docs/plan.md".to_string(),
+        true,
+        false,
+        "sha256".to_string(),
+        ".humanize/rlcr/2026-01-18_12-00-00/plan.md".to_string(),
+        None,
         "feature/resume".to_string(),
         "main".to_string(),
         "deadbeef".to_string(),

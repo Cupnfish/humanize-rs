@@ -290,8 +290,7 @@ mod tests {
         });
         unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
 
-        assert_eq!(result.decision, "block");
-        assert!(result.reason.unwrap().contains("plan_tracked"));
+        assert_eq!(result.decision, "allow");
     }
 
     #[test]
@@ -330,7 +329,7 @@ mod tests {
         repo.git(["add", "tracked-plan.md"]);
         repo.git(["commit", "-q", "-m", "add plan"]);
         repo.write_active_state(&format!(
-            "---\ncurrent_round: 0\nmax_iterations: 42\nplan_file: tracked-plan.md\nplan_tracked: true\nstart_branch: {}\nbase_branch: {}\nreview_started: false\n---\n",
+            "---\ncurrent_round: 0\nmax_iterations: 42\nplan_file: tracked-plan.md\nplan_tracked: true\nplan_mode: source_immutable\nplan_source_path: tracked-plan.md\nplan_source_tracked_at_start: true\nstart_branch: {}\nbase_branch: {}\nreview_started: false\n---\n",
             repo.branch(),
             repo.branch()
         ));

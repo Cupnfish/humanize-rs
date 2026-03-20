@@ -32,6 +32,20 @@ fn normalize_empty_session_id(raw: &str) -> Option<String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanMode {
+    Snapshot,
+    SourceClean,
+    SourceImmutable,
+}
+
+impl Default for PlanMode {
+    fn default() -> Self {
+        Self::Snapshot
+    }
+}
+
 /// Represents the state of an RLCR or PR loop.
 ///
 /// Schema matches setup-rlcr-loop.sh exactly:
@@ -73,6 +87,34 @@ pub struct State {
     /// Whether the plan file is tracked in git.
     #[serde(default)]
     pub plan_tracked: bool,
+
+    /// How the source plan should be treated during the loop.
+    #[serde(default)]
+    pub plan_mode: PlanMode,
+
+    /// Original source plan path captured when the loop started.
+    #[serde(default)]
+    pub plan_source_path: String,
+
+    /// Whether the source plan existed when the loop started.
+    #[serde(default)]
+    pub plan_source_exists_at_start: bool,
+
+    /// Whether the source plan was tracked when the loop started.
+    #[serde(default)]
+    pub plan_source_tracked_at_start: bool,
+
+    /// SHA-256 of the source plan when the loop started.
+    #[serde(default)]
+    pub plan_source_sha256: String,
+
+    /// Snapshot plan path stored inside the loop directory.
+    #[serde(default)]
+    pub plan_snapshot_path: String,
+
+    /// Optional git blob oid of the source plan at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_source_git_oid: Option<String>,
 
     /// Branch where the loop started.
     #[serde(default)]
@@ -186,6 +228,13 @@ impl Default for State {
             full_review_round: default_full_review_round(),
             plan_file: String::new(),
             plan_tracked: false,
+            plan_mode: PlanMode::Snapshot,
+            plan_source_path: String::new(),
+            plan_source_exists_at_start: false,
+            plan_source_tracked_at_start: false,
+            plan_source_sha256: String::new(),
+            plan_snapshot_path: String::new(),
+            plan_source_git_oid: None,
             start_branch: String::new(),
             base_branch: String::new(),
             base_commit: String::new(),
@@ -321,6 +370,13 @@ impl State {
     pub fn new_rlcr(
         plan_file: String,
         plan_tracked: bool,
+        plan_mode: PlanMode,
+        plan_source_path: String,
+        plan_source_exists_at_start: bool,
+        plan_source_tracked_at_start: bool,
+        plan_source_sha256: String,
+        plan_snapshot_path: String,
+        plan_source_git_oid: Option<String>,
         start_branch: String,
         base_branch: String,
         base_commit: String,
@@ -345,6 +401,13 @@ impl State {
             full_review_round: full_review_round.unwrap_or_else(default_full_review_round),
             plan_file,
             plan_tracked,
+            plan_mode,
+            plan_source_path,
+            plan_source_exists_at_start,
+            plan_source_tracked_at_start,
+            plan_source_sha256,
+            plan_snapshot_path,
+            plan_source_git_oid,
             start_branch,
             base_branch,
             base_commit,
@@ -689,6 +752,13 @@ Some content below.
         let original = State::new_rlcr(
             "docs/plan.md".to_string(),
             false,
+            PlanMode::Snapshot,
+            "docs/plan.md".to_string(),
+            true,
+            false,
+            "sha256".to_string(),
+            ".humanize/rlcr/session/plan.md".to_string(),
+            None,
             "master".to_string(),
             "master".to_string(),
             "abc123".to_string(),
@@ -709,6 +779,7 @@ Some content below.
         assert_eq!(original.current_round, parsed.current_round);
         assert_eq!(original.plan_file, parsed.plan_file);
         assert_eq!(original.base_branch, parsed.base_branch);
+        assert_eq!(original.plan_mode, parsed.plan_mode);
     }
 
     #[test]

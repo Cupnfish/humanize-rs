@@ -1,5 +1,6 @@
 use super::pr::render_template_or_fallback;
 use super::*;
+use humanize_core::state::PlanMode;
 use regex::Regex;
 use std::path::Path;
 
@@ -1159,7 +1160,13 @@ pub(super) fn validate_plan_file(input: &HookInput) -> HookOutput {
         ));
     }
 
-    let plan_is_tracked = match git_path_is_tracked(Path::new(&project_root), &state.plan_file) {
+    let source_path = if state.plan_source_path.trim().is_empty() {
+        &state.plan_file
+    } else {
+        &state.plan_source_path
+    };
+
+    let plan_is_tracked = match git_path_is_tracked(Path::new(&project_root), source_path) {
         Ok(v) => v,
         Err(GitPathCheckError::Failed(code)) => {
             return HookOutput::block(format!(
@@ -1175,45 +1182,65 @@ pub(super) fn validate_plan_file(input: &HookInput) -> HookOutput {
         }
     };
 
-    if state.plan_tracked {
-        if !plan_is_tracked {
-            return HookOutput::block(format!(
-                "Plan file is no longer tracked in git.\n\nFile: {}\n\nThis RLCR loop was started with --track-plan-file, but the plan file has been removed from git tracking.",
-                state.plan_file
-            ));
+    match state.plan_mode {
+        PlanMode::Snapshot => {}
+        PlanMode::SourceClean => {
+            if plan_is_tracked {
+                let plan_git_status = match git_path_status_porcelain(Path::new(&project_root), source_path) {
+                    Ok(status) => status,
+                    Err(GitPathCheckError::Failed(code)) => {
+                        return HookOutput::block(format!(
+                            "Git operation failed while checking plan file status (exit code: {}).\n\nPlease check git status and try again.",
+                            code
+                        ));
+                    }
+                    Err(GitPathCheckError::Io(err)) => {
+                        return HookOutput::block(format!(
+                            "Git operation failed while checking plan file status.\n\n{}\n\nPlease check git status and try again.",
+                            err
+                        ));
+                    }
+                };
+                if !plan_git_status.trim().is_empty() {
+                    return HookOutput::block(format!(
+                        "Plan file has uncommitted modifications.\n\nFile: {}\nStatus: {}\n\nThis RLCR loop was started with --plan-lock source-clean. Tracked plan file modifications are not allowed during the loop.",
+                        source_path,
+                        plan_git_status.trim()
+                    ));
+                }
+            }
         }
-
-        let plan_git_status = match git_path_status_porcelain(
-            Path::new(&project_root),
-            &state.plan_file,
-        ) {
-            Ok(status) => status,
-            Err(GitPathCheckError::Failed(code)) => {
+        PlanMode::SourceImmutable => {
+            if !plan_is_tracked || !state.plan_source_tracked_at_start {
                 return HookOutput::block(format!(
-                    "Git operation failed while checking plan file status (exit code: {}).\n\nPlease check git status and try again.",
-                    code
+                    "Plan file is no longer tracked in git.\n\nFile: {}\n\nThis RLCR loop was started with a locked source plan, but the plan file has been removed from git tracking.",
+                    source_path
                 ));
             }
-            Err(GitPathCheckError::Io(err)) => {
+
+            let plan_git_status = match git_path_status_porcelain(Path::new(&project_root), source_path) {
+                Ok(status) => status,
+                Err(GitPathCheckError::Failed(code)) => {
+                    return HookOutput::block(format!(
+                        "Git operation failed while checking plan file status (exit code: {}).\n\nPlease check git status and try again.",
+                        code
+                    ));
+                }
+                Err(GitPathCheckError::Io(err)) => {
+                    return HookOutput::block(format!(
+                        "Git operation failed while checking plan file status.\n\n{}\n\nPlease check git status and try again.",
+                        err
+                    ));
+                }
+            };
+            if !plan_git_status.trim().is_empty() {
                 return HookOutput::block(format!(
-                    "Git operation failed while checking plan file status.\n\n{}\n\nPlease check git status and try again.",
-                    err
+                    "Plan file has uncommitted modifications.\n\nFile: {}\nStatus: {}\n\nThis RLCR loop was started with --plan-lock source-immutable. Plan file modifications are not allowed during the loop.",
+                    source_path,
+                    plan_git_status.trim()
                 ));
             }
-        };
-
-        if !plan_git_status.trim().is_empty() {
-            return HookOutput::block(format!(
-                "Plan file has uncommitted modifications.\n\nFile: {}\nStatus: {}\n\nThis RLCR loop was started with --track-plan-file. Plan file modifications are not allowed during the loop.",
-                state.plan_file,
-                plan_git_status.trim()
-            ));
         }
-    } else if plan_is_tracked {
-        return HookOutput::block(format!(
-            "Plan file is now tracked in git but loop was started without --track-plan-file.\n\nFile: {}\n\nThe plan file must remain gitignored during this RLCR loop.",
-            state.plan_file
-        ));
     }
 
     HookOutput::allow()
@@ -1224,10 +1251,6 @@ pub(super) fn validate_plan_state_schema(state_content: &str) -> Option<String> 
         Ok(m) => m,
         Err(_) => return Some("Malformed state file, blocking operation for safety".to_string()),
     };
-
-    if !mapping.contains_key(serde_yaml::Value::String("plan_tracked".to_string())) {
-        return Some(outdated_schema_reason("plan_tracked"));
-    }
 
     match mapping.get(serde_yaml::Value::String("start_branch".to_string())) {
         Some(serde_yaml::Value::String(value)) if !value.trim().is_empty() => None,

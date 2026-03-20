@@ -610,7 +610,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "humanize-cli"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -624,19 +624,21 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "humanize-cli-core"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "chrono",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "wait-timeout",
@@ -2147,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "serde",

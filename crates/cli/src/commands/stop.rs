@@ -1,5 +1,6 @@
 use super::pr::*;
 use super::*;
+use humanize_core::state::PlanMode;
 
 #[derive(Debug, Default, Deserialize)]
 struct StopHookInput {
@@ -370,32 +371,65 @@ fn stop_hook_plan_integrity_check(
         return Some("Plan file backup not found in loop directory.".to_string());
     }
 
-    let full_plan = project_root.join(&state.plan_file);
-    if !full_plan.exists() {
-        return Some(format!(
-            "Project plan file has been deleted.\n\nOriginal: {}",
-            state.plan_file
-        ));
+    if fs::symlink_metadata(&backup_plan)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Some("Plan snapshot in loop directory cannot be a symbolic link.".to_string());
     }
 
-    if state.plan_tracked {
-        let plan_status = git_path_status_porcelain(project_root, &state.plan_file).ok()?;
-        if !plan_status.trim().is_empty() {
+    let source_path = if state.plan_source_path.trim().is_empty() {
+        &state.plan_file
+    } else {
+        &state.plan_source_path
+    };
+
+    if matches!(state.plan_mode, PlanMode::SourceClean | PlanMode::SourceImmutable) {
+        let full_plan = project_root.join(source_path);
+        if !full_plan.exists() {
             return Some(format!(
-                "Plan file has uncommitted modifications.\n\nFile: {}\nStatus: {}",
-                state.plan_file,
-                plan_status.trim()
+                "Project plan file has been deleted.\n\nOriginal: {}",
+                source_path
             ));
         }
-    }
 
-    let backup_content = fs::read_to_string(&backup_plan).ok()?;
-    let current_content = fs::read_to_string(&full_plan).ok()?;
-    if backup_content != current_content {
-        return Some(format!(
-            "The plan file `{}` has been modified since the RLCR loop started.",
-            state.plan_file
-        ));
+        if matches!(state.plan_mode, PlanMode::SourceImmutable) {
+            let tracked = git_path_is_tracked(project_root, source_path).ok()?;
+            if tracked != state.plan_source_tracked_at_start {
+                return Some(format!(
+                    "Plan file tracking changed during RLCR loop.\n\nFile: {}",
+                    source_path
+                ));
+            }
+        }
+
+        let tracked = git_path_is_tracked(project_root, source_path).ok()?;
+        if tracked {
+            let plan_status = git_path_status_porcelain(project_root, source_path).ok()?;
+            if !plan_status.trim().is_empty() {
+                return Some(format!(
+                    "Plan file has uncommitted modifications.\n\nFile: {}\nStatus: {}",
+                    source_path,
+                    plan_status.trim()
+                ));
+            }
+        }
+
+        if matches!(state.plan_mode, PlanMode::SourceImmutable) && !state.plan_source_sha256.is_empty() {
+            let current_content = fs::read(&full_plan).ok()?;
+            let current_hash = {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(&current_content);
+                format!("{:x}", hasher.finalize())
+            };
+            if current_hash != state.plan_source_sha256 {
+                return Some(format!(
+                    "The plan file `{}` has been modified since the RLCR loop started.",
+                    source_path
+                ));
+            }
+        }
     }
 
     None
