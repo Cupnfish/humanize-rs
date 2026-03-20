@@ -1,6 +1,28 @@
 use super::pr::render_template_or_fallback;
 use super::*;
 use regex::Regex;
+use std::path::Path;
+
+/// Compare two paths to see if they refer to the same location (ignoring case and separator differences).
+fn paths_equal(a: &str, b: &str) -> bool {
+    let a = Path::new(a);
+    let b = Path::new(b);
+    let mut a_comps = a.components();
+    let mut b_comps = b.components();
+    loop {
+        match (a_comps.next(), b_comps.next()) {
+            (Some(ac), Some(bc)) => {
+                let a_str = ac.as_os_str().to_string_lossy().to_lowercase();
+                let b_str = bc.as_os_str().to_string_lossy().to_lowercase();
+                if a_str != b_str {
+                    return false;
+                }
+            }
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
 
 /// Validate Read tool access.
 ///
@@ -146,7 +168,7 @@ pub(super) fn validate_read(input: &HookInput) -> HookOutput {
     let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
     let correct_path = active_loop_dir.join(filename);
 
-    if file_path != correct_path.to_string_lossy() {
+    if !paths_equal(&file_path, &correct_path.to_string_lossy()) {
         return HookOutput::block(format!(
             "You tried to read {} but the correct path is {}",
             file_path,
@@ -277,7 +299,7 @@ pub(super) fn validate_write(input: &HookInput) -> HookOutput {
     // Allow finalize-summary.md in finalize phase
     if is_finalize_summary && in_humanize_loop_dir {
         let expected_path = format!("{}/finalize-summary.md", active_loop_dir.display());
-        if file_path == expected_path {
+        if paths_equal(&file_path, &expected_path) {
             return HookOutput::allow();
         }
     }
@@ -316,7 +338,7 @@ pub(super) fn validate_write(input: &HookInput) -> HookOutput {
     if in_humanize_loop_dir {
         let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
         let correct_path = format!("{}/{}", active_loop_dir.display(), filename);
-        if file_path != correct_path {
+        if !paths_equal(&file_path, &correct_path) {
             return HookOutput::block(format!(
                 "You tried to write to {} but the correct path is {}",
                 file_path, correct_path
@@ -1295,6 +1317,81 @@ mod tests {
             .current_dir(repo.path()));
 
         assert!(!git_adds_humanize("git add .", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_quoted_paths() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git add \".humanize\"", repo.path()));
+        assert!(git_adds_humanize("git add '.humanize'", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_quoted_non_humanize_path_allowed() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+        std::fs::write(repo.path().join(".gitignore"), ".humanize/\n").unwrap();
+        run(Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path()));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "ignore humanize"])
+            .current_dir(repo.path()));
+
+        assert!(!git_adds_humanize("git add \"my file.txt\"", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_combined_flags() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git add -fA", repo.path()));
+        assert!(git_adds_humanize("git add --force --all", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_git_with_options() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git -C subdir add .humanize", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_command_chains() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("cd repo && git add .humanize", repo.path()));
+        assert!(git_adds_humanize("git add . && git commit -m 'msg'", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_redirections() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git add . 2>/dev/null", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_double_dash_separator() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git add -- .humanize", repo.path()));
+    }
+
+    #[test]
+    fn git_adds_humanize_wildcards() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize("git add .humanize/*", repo.path()));
+        assert!(git_adds_humanize("git add .humanize/**/*.md", repo.path()));
     }
 
     #[test]
