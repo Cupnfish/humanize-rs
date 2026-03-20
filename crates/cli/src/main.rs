@@ -317,7 +317,14 @@ enum GateCommands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {}", err);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if !matches!(cli.command, Commands::Init { .. } | Commands::Doctor { .. })
