@@ -161,7 +161,7 @@ fn non_complete_feedback_increments_round_and_writes_review_result() {
     )
     .unwrap();
     let bin_dir = repo.mock_codex(
-        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  printf '## Review Feedback\\n\\nSome issues need to be addressed:\\n- Issue 1: Fix the bug in function X\\n\\nCONTINUE\\n'\nfi\n",
+        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  printf '## Review Feedback\\n\\n[P1] Issue 1: Fix the bug in function X\\nMore detail\\n'\nfi\n",
     );
 
     let mut child = Command::new(bin())
@@ -318,7 +318,7 @@ fn resume_then_stop_still_runs_codex_review() {
 
     let marker = repo.root().join(".humanize/codex-called.log");
     let bin_dir = repo.mock_codex(&format!(
-        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  echo CALLED >> \"{}\"\n  cat >/dev/null\n  printf '## Review Feedback\\n\\nSome issues need to be addressed:\\n- Issue 1\\n\\nCONTINUE\\n'\nfi\n",
+        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  echo CALLED >> \"{}\"\n  cat >/dev/null\n  printf '## Review Feedback\\n\\n[P1] Issue 1\\n'\nfi\n",
         marker.display()
     ));
 

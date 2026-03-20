@@ -464,30 +464,22 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
         return None;
     }
 
-    // Collect all subdirectories with their modification times
-    let mut dirs_with_mtime: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
-
     let entries = match std::fs::read_dir(base_dir) {
         Ok(e) => e,
         Err(_) => return None,
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let mtime = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            dirs_with_mtime.push((path, mtime));
-        }
-    }
-
-    // Sort by modification time, newest first
-    dirs_with_mtime.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut dirs = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    dirs.reverse();
 
     if session_id.is_none() {
         // No filter: only check the single newest directory (zombie-loop protection)
-        if let Some((newest_dir, _)) = dirs_with_mtime.first() {
+        if let Some(newest_dir) = dirs.first() {
             // Only return if it has an active state file
             if resolve_active_state_file(newest_dir).is_some() {
                 return Some(newest_dir.clone());
@@ -499,7 +491,7 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
     // Session filter: iterate newest-to-oldest
     let filter_sid = session_id.unwrap();
 
-    for (loop_dir, _) in dirs_with_mtime {
+    for loop_dir in dirs {
         // Check if this directory has any state file (active or terminal)
         let any_state = resolve_any_state_file(&loop_dir);
         if any_state.is_none() {
@@ -509,19 +501,7 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
         // Read session_id from the state file
         let stored_session_id = any_state
             .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|content| {
-                // Extract session_id from YAML frontmatter
-                for line in content.lines() {
-                    if line.starts_with("session_id:") {
-                        let value = line.strip_prefix("session_id:").unwrap_or("").trim();
-                        return normalize_empty_session_id(value);
-                    }
-                    if line == "---" && !content.starts_with("---") {
-                        break; // End of frontmatter
-                    }
-                }
-                None
-            });
+            .and_then(|content| extract_session_id_from_frontmatter(&content));
 
         // Empty stored session_id matches any session (backward compatibility)
         let matches_session = match stored_session_id {
@@ -534,6 +514,27 @@ pub fn find_active_loop(base_dir: &Path, session_id: Option<&str>) -> Option<Pat
             if resolve_active_state_file(&loop_dir).is_some() {
                 return Some(loop_dir);
             }
+            // The session's newest loop is terminal; do not fall through to older dirs.
+            return None;
+        }
+    }
+
+    None
+}
+
+fn extract_session_id_from_frontmatter(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()? != "---" {
+        return None;
+    }
+
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+
+        if let Some(value) = line.strip_prefix("session_id:") {
+            return normalize_empty_session_id(value.trim());
         }
     }
 
@@ -765,5 +766,48 @@ base_branch: master
 "#;
         let result = State::from_markdown_strict(content_valid);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn find_active_loop_uses_directory_name_order_without_session_filter() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let base = tempdir.path().join("rlcr");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let older = base.join("2026-03-18_00-00-00");
+        let newer = base.join("2026-03-19_00-00-00");
+        std::fs::create_dir_all(&older).unwrap();
+        std::fs::create_dir_all(&newer).unwrap();
+
+        std::fs::write(
+            older.join("state.md"),
+            "---\nsession_id: old\ncurrent_round: 0\nmax_iterations: 1\nplan_file: plan.md\nplan_tracked: false\nstart_branch: main\nbase_branch: main\nbase_commit: abc\nreview_started: false\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            newer.join("cancel-state.md"),
+            "---\nsession_id: new\ncurrent_round: 0\nmax_iterations: 1\nplan_file: plan.md\nplan_tracked: false\nstart_branch: main\nbase_branch: main\nbase_commit: abc\nreview_started: false\n---\n",
+        )
+        .unwrap();
+
+        assert_eq!(find_active_loop(&base, None), None);
+    }
+
+    #[test]
+    fn find_active_loop_stops_at_newest_terminal_match_for_session() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let base = tempdir.path().join("rlcr");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let older = base.join("2026-03-18_00-00-00");
+        let newer = base.join("2026-03-19_00-00-00");
+        std::fs::create_dir_all(&older).unwrap();
+        std::fs::create_dir_all(&newer).unwrap();
+
+        let state = "---\nsession_id: session-1\ncurrent_round: 0\nmax_iterations: 1\nplan_file: plan.md\nplan_tracked: false\nstart_branch: main\nbase_branch: main\nbase_commit: abc\nreview_started: false\n---\n";
+        std::fs::write(older.join("state.md"), state).unwrap();
+        std::fs::write(newer.join("cancel-state.md"), state).unwrap();
+
+        assert_eq!(find_active_loop(&base, Some("session-1")), None);
     }
 }

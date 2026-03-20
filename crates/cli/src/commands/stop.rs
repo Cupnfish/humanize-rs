@@ -234,7 +234,7 @@ fn run_review_phase(
     options.timeout_secs = state.codex_timeout;
 
     let log_file = cache_dir.join(format!("round-{}-codex-review.log", review_round));
-    let combined_output = match humanize_core::codex::run_review(
+    let _combined_output = match humanize_core::codex::run_review(
         if state.base_commit.is_empty() {
             &state.base_branch
         } else {
@@ -283,14 +283,12 @@ fn run_review_phase(
         }
     };
 
-    if humanize_core::codex::contains_severity_markers(&combined_output) {
-        let result_file = loop_dir.join(format!("round-{}-review-result.md", review_round));
-        fs::write(&result_file, &combined_output)?;
+    if let Some(review_issues) = detect_review_issues(review_round, loop_dir, &cache_dir)? {
         state.current_round = review_round;
         state.save(state_file)?;
         let next_prompt_file = loop_dir.join(format!("round-{}-prompt.md", review_round));
         let next_summary_file = loop_dir.join(format!("round-{}-summary.md", review_round));
-        let review_fix_prompt = build_review_phase_fix_prompt(&combined_output, &next_summary_file);
+        let review_fix_prompt = build_review_phase_fix_prompt(&review_issues, &next_summary_file);
         fs::write(&next_prompt_file, &review_fix_prompt)?;
         return emit_stop_block(
             &review_fix_prompt,
@@ -317,6 +315,43 @@ fn combine_review_output(stdout: &str, stderr: &str) -> String {
         (s, "") => format!("{}\n", s),
         (s1, s2) => format!("{}\n{}\n", s1, s2),
     }
+}
+
+fn detect_review_issues(round: u32, loop_dir: &Path, cache_dir: &Path) -> Result<Option<String>> {
+    let log_file = cache_dir.join(format!("round-{}-codex-review.log", round));
+    if !log_file.is_file() {
+        anyhow::bail!("Codex review log file not found: {}", log_file.display());
+    }
+
+    let content = fs::read_to_string(&log_file)?;
+    if content.trim().is_empty() {
+        anyhow::bail!("Codex review log file is empty: {}", log_file.display());
+    }
+
+    let lines = content.lines().collect::<Vec<_>>();
+    let scan_start = lines.len().saturating_sub(50);
+    let relative_match = lines[scan_start..]
+        .iter()
+        .position(|line| severity_marker_near_start(line));
+
+    let Some(relative_match) = relative_match else {
+        return Ok(None);
+    };
+
+    let start_index = scan_start + relative_match;
+    let extracted = lines[start_index..].join("\n");
+    let result_file = loop_dir.join(format!("round-{}-review-result.md", round));
+    fs::write(&result_file, format!("{extracted}\n"))?;
+
+    Ok(Some(format!("## Codex Review Issues\n\n{}", extracted)))
+}
+
+fn severity_marker_near_start(line: &str) -> bool {
+    let prefix = line.chars().take(10).collect::<String>();
+    let bytes = prefix.as_bytes();
+    bytes.windows(4).any(|window| {
+        window[0] == b'[' && window[1] == b'P' && window[2].is_ascii_digit() && window[3] == b']'
+    })
 }
 
 fn stop_hook_plan_integrity_check(
@@ -942,4 +977,55 @@ fn handle_stop_pr() -> Result<()> {
             next_round, state.max_iterations
         )),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_review_issues_scans_only_tail_and_extracts_from_first_marker() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let loop_dir = tempdir.path().join("loop");
+        let cache_dir = tempdir.path().join("cache");
+        fs::create_dir_all(&loop_dir).unwrap();
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        let mut lines = (0..55).map(|idx| format!("line {idx}")).collect::<Vec<_>>();
+        lines[2] = "[P1] old marker outside scan window".to_string();
+        lines.push("[P2] issue in tail".to_string());
+        lines.push("follow-up detail".to_string());
+        fs::write(cache_dir.join("round-3-codex-review.log"), lines.join("\n")).unwrap();
+
+        let extracted = detect_review_issues(3, &loop_dir, &cache_dir)
+            .unwrap()
+            .unwrap();
+        let saved = fs::read_to_string(loop_dir.join("round-3-review-result.md")).unwrap();
+
+        assert!(extracted.contains("[P2] issue in tail"));
+        assert!(saved.starts_with("[P2] issue in tail"));
+        assert!(!saved.contains("old marker outside scan window"));
+    }
+
+    #[test]
+    fn detect_review_issues_returns_none_without_tail_marker() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let loop_dir = tempdir.path().join("loop");
+        let cache_dir = tempdir.path().join("cache");
+        fs::create_dir_all(&loop_dir).unwrap();
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        fs::write(
+            cache_dir.join("round-2-codex-review.log"),
+            "review complete\nno priorities found\n",
+        )
+        .unwrap();
+
+        assert!(
+            detect_review_issues(2, &loop_dir, &cache_dir)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!loop_dir.join("round-2-review-result.md").exists());
+    }
 }

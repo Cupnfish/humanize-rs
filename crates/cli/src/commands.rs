@@ -396,6 +396,11 @@ mod tests {
 
     #[test]
     fn bash_validator_blocks_broad_git_add_patterns() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
         let input = HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({
@@ -407,12 +412,18 @@ mod tests {
         };
 
         let result = validate_bash(&input);
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
         assert_eq!(result.decision, "block");
         assert!(result.reason.unwrap().contains("git add"));
     }
 
     #[test]
     fn bash_validator_blocks_python_write_to_protected_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
         let input = HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({
@@ -424,6 +435,7 @@ mod tests {
         };
 
         let result = validate_bash(&input);
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
         assert_eq!(result.decision, "block");
         assert!(
             result
@@ -435,6 +447,11 @@ mod tests {
 
     #[test]
     fn bash_validator_blocks_exec_fd_redirection_to_protected_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
         let input = HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({
@@ -446,11 +463,17 @@ mod tests {
         };
 
         let result = validate_bash(&input);
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
         assert_eq!(result.decision, "block");
     }
 
     #[test]
     fn bash_validator_blocks_append_redirect_variants() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
         let input = HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({
@@ -462,7 +485,80 @@ mod tests {
         };
 
         let result = validate_bash(&input);
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
         assert_eq!(result.decision, "block");
+    }
+
+    #[test]
+    fn bash_validator_blocks_shell_wrapper_for_state_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
+        let input = HookInput {
+            tool_name: "Bash".to_string(),
+            tool_input: json!({
+                "command": "sh -c 'rm state.md'"
+            }),
+            session_id: None,
+            tool_output: None,
+            tool_result: None,
+        };
+
+        let result = validate_bash(&input);
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
+        assert_eq!(result.decision, "block");
+    }
+
+    #[test]
+    fn bash_validator_allows_safe_commands() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let repo = TestRepo::new();
+        repo.write_valid_active_state(1);
+
+        unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", repo.root()) };
+        for command in ["cat state.md", "git status", "ls -la", "grep pattern file"] {
+            let input = HookInput {
+                tool_name: "Bash".to_string(),
+                tool_input: json!({ "command": command }),
+                session_id: None,
+                tool_output: None,
+                tool_result: None,
+            };
+            let result = validate_bash(&input);
+            assert_eq!(result.decision, "allow", "command={command}");
+        }
+        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
+    }
+
+    #[test]
+    fn post_tool_use_matches_exact_boundary() {
+        assert!(is_setup_invocation(
+            "/tmp/setup-rlcr-loop.sh",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
+        assert!(is_setup_invocation(
+            "/tmp/setup-rlcr-loop.sh arg",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
+        assert!(is_setup_invocation(
+            "/tmp/setup-rlcr-loop.sh\targ",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
+        assert!(is_setup_invocation(
+            "\"/tmp/setup-rlcr-loop.sh\" arg",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
+
+        assert!(!is_setup_invocation(
+            "\"/tmp/setup-rlcr-loop.sh\"foo",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
+        assert!(!is_setup_invocation(
+            "echo /tmp/setup-rlcr-loop.sh",
+            "/tmp/setup-rlcr-loop.sh"
+        ));
     }
 
     struct TestRepo {
@@ -539,6 +635,15 @@ mod tests {
         fn write_active_state(&self, contents: &str) {
             std::fs::write(self.loop_dir.join("state.md"), contents).unwrap();
         }
+
+        fn write_valid_active_state(&self, current_round: u32) {
+            self.write_active_state(&format!(
+                "---\ncurrent_round: {}\nmax_iterations: 42\ncodex_model: gpt-5.4\ncodex_effort: high\ncodex_timeout: 5400\npush_every_round: false\nfull_review_round: 5\nplan_file: plan.md\nplan_tracked: false\nstart_branch: {}\nbase_branch: {}\nbase_commit: deadbeef\nreview_started: false\nask_codex_question: true\nsession_id:\nagent_teams: false\n---\n",
+                current_round,
+                self.branch(),
+                self.branch()
+            ));
+        }
     }
 
     fn run(cmd: &mut Command) {
@@ -557,6 +662,17 @@ fn is_empty_session_id_line(line: &str) -> bool {
             | "session_id: ''"
             | "session_id: \"\""
     )
+}
+
+fn starts_with_boundary(command: &str, prefix: &str) -> bool {
+    command
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace))
+}
+
+fn is_setup_invocation(command: &str, command_signature: &str) -> bool {
+    let quoted = format!("\"{}\"", command_signature);
+    starts_with_boundary(command, command_signature) || starts_with_boundary(command, &quoted)
 }
 
 /// Handle PostToolUse hook for session handshake.
@@ -613,18 +729,7 @@ fn handle_post_tool_use(input: &HookInput) -> HookOutput {
         None => return HookOutput::allow(),
     };
 
-    // Boundary-aware match: command must start with signature followed by
-    // end-of-string or whitespace (prevents substring false positives)
-    let is_setup_invocation = {
-        // Check quoted form: "signature" or "signature" followed by space/tab
-        let quoted = format!("\"{}\"", command_signature);
-        command == quoted || command.starts_with(&format!("{} ", quoted)) || command.starts_with(&format!("{}\t", quoted))
-            ||
-        // Check unquoted form: signature or signature followed by space/tab
-        command == command_signature || command.starts_with(&format!("{} ", command_signature)) || command.starts_with(&format!("{}\t", command_signature))
-    };
-
-    if !is_setup_invocation {
+    if !is_setup_invocation(&command, command_signature) {
         // This bash event is not from the setup script - don't consume signal
         return HookOutput::allow();
     }

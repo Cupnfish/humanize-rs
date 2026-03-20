@@ -1,5 +1,6 @@
 use super::pr::render_template_or_fallback;
 use super::*;
+use regex::Regex;
 
 /// Validate Read tool access.
 ///
@@ -360,44 +361,221 @@ const PROTECTED_PATTERNS: &[&str] = &[
     "-pr-check.md",
     "-pr-feedback.md",
     "-codex-prompt.md",
+    ".humanize/rlcr/",
 ];
 
-/// Check if a command contains any protected file pattern.
-fn contains_protected_pattern(cmd_lower: &str) -> Option<&'static str> {
-    PROTECTED_PATTERNS
-        .iter()
-        .find(|p| cmd_lower.contains(*p))
-        .copied()
+const PR_LOOP_READONLY_PATTERNS: &[&str] = &[
+    "round-[0-9]+-pr-comment\\.md",
+    "round-[0-9]+-prompt\\.md",
+    "round-[0-9]+-codex-prompt\\.md",
+    "round-[0-9]+-pr-check\\.md",
+    "round-[0-9]+-pr-feedback\\.md",
+];
+
+const SAFE_BASH_PATTERNS: &[&str] = &[
+    "git status",
+    "git log",
+    "git diff",
+    "git branch",
+    "git rev-parse",
+    "git show",
+    "git remote",
+    "git ls-files",
+    "cargo build",
+    "cargo check",
+    "cargo test",
+    "cargo clippy",
+    "cargo fmt --check",
+    "ls ",
+    "cat ",
+    "head ",
+    "tail ",
+    "grep ",
+    "which ",
+    "pwd",
+    "rg ",
+    "find ",
+    "wc ",
+    "sed -n",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteStyle {
+    None,
+    Single,
+    Double,
 }
 
-fn bash_has_control_operators(cmd_lower: &str) -> bool {
-    ["|", "&&", ";", "`", "$(", "||", "<(", ">(", "\n"]
-        .iter()
-        .any(|pattern| cmd_lower.contains(pattern))
+struct ParsedShellArg<'a> {
+    value: &'a str,
+    quote: QuoteStyle,
+}
+
+fn regex_is_match(pattern: &str, text: &str) -> bool {
+    Regex::new(pattern)
+        .map(|regex| regex.is_match(text))
+        .unwrap_or(false)
+}
+
+fn split_shell_segments(command_lower: &str) -> Vec<&str> {
+    Regex::new(r"(?:\|\&|\&\&|\|\||[|;])")
+        .unwrap()
+        .split(command_lower)
+        .collect()
+}
+
+fn has_safe_command_blockers(cmd_lower: &str) -> bool {
+    [
+        "|&", "&&", "||", "|", ";", "`", "$(", "${", "\n", "<(", ">(", " -c ",
+    ]
+    .iter()
+    .any(|pattern| cmd_lower.contains(pattern))
+        || cmd_lower.contains('>')
         || cmd_lower.trim_end().ends_with('&')
 }
 
-fn git_adds_humanize(cmd_trimmed: &str) -> bool {
-    let cmd_lower = cmd_trimmed.to_lowercase();
-    if !cmd_lower.starts_with("git add") {
-        return false;
+fn is_safe_bash_command(cmd_lower: &str) -> bool {
+    SAFE_BASH_PATTERNS
+        .iter()
+        .any(|pattern| cmd_lower.starts_with(pattern) && !has_safe_command_blockers(cmd_lower))
+}
+
+fn normalize_shell_path(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.contains("//") {
+        normalized = normalized.replace("//", "/");
     }
-    if cmd_lower.contains(".humanize") {
-        return true;
+    while normalized.contains("/./") {
+        normalized = normalized.replace("/./", "/");
+    }
+    normalized.to_lowercase()
+}
+
+fn parse_shell_arg(input: &str) -> Option<(ParsedShellArg<'_>, &str)> {
+    let trimmed = input.trim_start();
+    if trimmed.is_empty() {
+        return None;
     }
 
-    let tokens = cmd_trimmed.split_whitespace().collect::<Vec<_>>();
-    for token in tokens.iter().skip(2) {
-        let lower = token.to_ascii_lowercase();
-        if lower == "." || lower == "*" || lower == "./" || lower == ":/" {
+    let mut chars = trimmed.char_indices();
+    let (_, first) = chars.next()?;
+    match first {
+        '"' => {
+            let end = trimmed[1..].find('"')? + 1;
+            let value = &trimmed[1..end];
+            Some((
+                ParsedShellArg {
+                    value,
+                    quote: QuoteStyle::Double,
+                },
+                &trimmed[end + 1..],
+            ))
+        }
+        '\'' => {
+            let end = trimmed[1..].find('\'')? + 1;
+            let value = &trimmed[1..end];
+            Some((
+                ParsedShellArg {
+                    value,
+                    quote: QuoteStyle::Single,
+                },
+                &trimmed[end + 1..],
+            ))
+        }
+        _ => {
+            let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+            Some((
+                ParsedShellArg {
+                    value: &trimmed[..end],
+                    quote: QuoteStyle::None,
+                },
+                &trimmed[end..],
+            ))
+        }
+    }
+}
+
+fn contains_protected_pattern(cmd_lower: &str) -> Option<&'static str> {
+    PROTECTED_PATTERNS
+        .iter()
+        .find(|pattern| cmd_lower.contains(**pattern))
+        .copied()
+}
+
+fn path_is_gitignored(project_root: &Path, path: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["check-ignore", "-q", path])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn git_adds_humanize(command_lower: &str, project_root: &Path) -> bool {
+    let command_lower = command_lower.to_lowercase();
+
+    for segment in split_shell_segments(&command_lower) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+
+        if !regex_is_match(
+            r"(^|[[:space:]])git[[:space:]]+([^[:space:]]+[[:space:]]+)*add([[:space:]]|$)",
+            segment,
+        ) {
+            continue;
+        }
+
+        let add_args = Regex::new(r".*?[[:space:]]add(?:[[:space:]]+(.*)|$)")
+            .ok()
+            .and_then(|regex| regex.captures(segment))
+            .and_then(|captures| captures.get(1).map(|value| value.as_str()))
+            .unwrap_or("");
+
+        let normalized_args = add_args.replace(['"', '\''], "");
+        if regex_is_match(
+            r"(^|[[:space:]]|/)\.humanize($|/|[[:space:]])",
+            &normalized_args,
+        ) {
             return true;
         }
-        if lower.starts_with('-')
-            && (lower.contains('a')
-                || lower.contains('u')
-                || lower == "--all"
-                || lower == "--update")
-        {
+
+        let tokens = add_args.split_whitespace().collect::<Vec<_>>();
+        let has_force = tokens.iter().any(|token| {
+            *token == "--force"
+                || token.strip_prefix('-').is_some_and(|flags| {
+                    !flags.is_empty()
+                        && flags.chars().all(|c| c.is_ascii_alphabetic())
+                        && flags.contains('f')
+                })
+        });
+        let has_all = tokens.iter().any(|token| {
+            *token == "--all"
+                || token.strip_prefix('-').is_some_and(|flags| {
+                    !flags.is_empty()
+                        && flags.chars().all(|c| c.is_ascii_alphabetic())
+                        && flags.contains('a')
+                })
+        });
+        let has_broad_scope = tokens
+            .iter()
+            .any(|token| matches!(token.replace(['"', '\''], "").as_str(), "." | "*" | "./"));
+
+        if has_force && (has_all || has_broad_scope) {
+            return true;
+        }
+
+        if !project_root.join(".humanize").is_dir() {
+            continue;
+        }
+
+        if has_all {
+            return true;
+        }
+
+        if has_broad_scope && !path_is_gitignored(project_root, ".humanize") {
             return true;
         }
     }
@@ -405,37 +583,208 @@ fn git_adds_humanize(cmd_trimmed: &str) -> bool {
     false
 }
 
-fn command_modifies_protected_file(cmd_lower: &str) -> bool {
-    let Some(_) = contains_protected_pattern(cmd_lower) else {
-        return false;
-    };
-
-    let write_like_patterns = [
-        ">",
-        ">>",
-        "tee ",
-        "sed -i",
-        "perl -i",
-        "ruby -i",
-        "truncate ",
-        "dd ",
-        "install ",
-        "mv ",
-        "cp ",
-        "touch ",
-        "rm ",
-        "python -c",
-        "python3 -c",
-        "node -e",
-        "ed ",
-        "ex ",
-        "exec >",
-        "xargs ",
+fn command_modifies_file(command_lower: &str, file_pattern: &str) -> bool {
+    let target = format!(r#"{}(?:$|[[:space:]/"'])"#, file_pattern);
+    let patterns = [
+        format!(r">[[:space:]]*[^[:space:]]*{}", target),
+        format!(r">>[[:space:]]*[^[:space:]]*{}", target),
+        format!(r"tee[[:space:]]+(-a[[:space:]]+)?[^[:space:]]*{}", target),
+        format!(r"sed[[:space:]]+-i[^|\n]*{}", target),
+        format!(r"awk[[:space:]]+-i[[:space:]]+inplace[^|\n]*{}", target),
+        format!(r"perl[[:space:]]+-[^[:space:]]*i[^|\n]*{}", target),
+        format!(r"(mv|cp)[[:space:]][^\n]*{}", target),
+        format!(r"rm[[:space:]]+(-[rfv]+[[:space:]]+)?[^\n]*{}", target),
+        format!(r"dd[[:space:]].*of=[^[:space:]]*{}", target),
+        format!(r"truncate[[:space:]][^|\n]*{}", target),
+        format!(r"printf[[:space:]].*>[[:space:]]*[^[:space:]]*{}", target),
+        format!(
+            r"exec[[:space:]]+[0-9]*>[[:space:]]*[^[:space:]]*{}",
+            target
+        ),
+        format!(r"python(?:3)?[[:space:]]+-c[^\n]*{}", target),
+        format!(r"node[[:space:]]+-e[^\n]*{}", target),
+        format!(r"ruby[[:space:]]+-i[^\n]*{}", target),
+        format!(r"touch[[:space:]][^\n]*{}", target),
+        format!(r"install[[:space:]][^\n]*{}", target),
+        format!(r"ed[[:space:]][^\n]*{}", target),
+        format!(r"ex[[:space:]][^\n]*{}", target),
     ];
 
-    write_like_patterns
+    patterns
         .iter()
-        .any(|pattern| cmd_lower.contains(pattern))
+        .any(|pattern| regex_is_match(pattern, command_lower))
+}
+
+fn is_cancel_authorized(active_loop_dir: &Path, command_lower: &str) -> bool {
+    if !active_loop_dir.join(".cancel-requested").is_file() {
+        return false;
+    }
+
+    if command_lower.contains("$(")
+        || command_lower.contains('`')
+        || command_lower.contains('\n')
+        || command_lower.contains(';')
+        || command_lower.contains("&&")
+        || command_lower.contains("||")
+        || command_lower.contains("|&")
+        || command_lower.contains('|')
+    {
+        return false;
+    }
+
+    let trailing_whitespace = command_lower
+        .chars()
+        .rev()
+        .take_while(|ch| ch.is_whitespace())
+        .count();
+    if trailing_whitespace >= 2 {
+        return false;
+    }
+
+    let loop_dir_lower = normalize_shell_path(&format!("{}/", active_loop_dir.display()));
+    let normalized = command_lower
+        .replace("${loop_dir}", &loop_dir_lower)
+        .replace("$loop_dir", &loop_dir_lower);
+
+    if normalized.contains('$') {
+        return false;
+    }
+
+    let Some(rest) = normalized.strip_prefix("mv") else {
+        return false;
+    };
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return false;
+    }
+
+    let rest = rest.trim_start();
+    let Some((src, rest)) = parse_shell_arg(rest) else {
+        return false;
+    };
+    let Some((dest, rest)) = parse_shell_arg(rest) else {
+        return false;
+    };
+    if !rest.trim().is_empty() {
+        return false;
+    }
+
+    if matches!(
+        (src.quote, dest.quote),
+        (QuoteStyle::Single, QuoteStyle::Double) | (QuoteStyle::Double, QuoteStyle::Single)
+    ) {
+        return false;
+    }
+
+    let src = normalize_shell_path(src.value);
+    let dest = normalize_shell_path(dest.value);
+    let expected_src_state = format!("{}state.md", loop_dir_lower);
+    let expected_src_finalize = format!("{}finalize-state.md", loop_dir_lower);
+    let expected_dest = format!("{}cancel-state.md", loop_dir_lower);
+
+    if src != expected_src_state && src != expected_src_finalize {
+        return false;
+    }
+
+    if dest != expected_dest {
+        return false;
+    }
+
+    let source_file = if src == expected_src_finalize {
+        active_loop_dir.join("finalize-state.md")
+    } else {
+        active_loop_dir.join("state.md")
+    };
+
+    std::fs::symlink_metadata(source_file)
+        .map(|metadata| !metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn git_add_humanize_blocked_reason() -> String {
+    render_template_or_fallback(
+        "block/git-add-humanize.md",
+        "# Git Add Blocked: .humanize Protection\n\nAdding .humanize files to version control is not allowed during an active loop.",
+        &[],
+    )
+}
+
+fn summary_bash_blocked_reason(correct_path: &str) -> String {
+    render_template_or_fallback(
+        "block/summary-bash-write.md",
+        "# Bash Write Blocked: Use Write or Edit Tool\n\nDo not use Bash commands to modify summary files.\n\nUse the Write or Edit tool instead: {{CORRECT_PATH}}",
+        &[("CORRECT_PATH", correct_path.to_string())],
+    )
+}
+
+fn goal_tracker_bash_blocked_reason(correct_path: &str) -> String {
+    render_template_or_fallback(
+        "block/goal-tracker-bash-write.md",
+        "# Bash Write Blocked: Use Write or Edit Tool\n\nDo not use Bash commands to modify goal-tracker.md.\n\nUse the Write or Edit tool instead: {{CORRECT_PATH}}",
+        &[("CORRECT_PATH", correct_path.to_string())],
+    )
+}
+
+fn goal_tracker_blocked_reason(current_round: u32, summary_file: &str) -> String {
+    render_template_or_fallback(
+        "block/goal-tracker-modification.md",
+        "# Goal Tracker Modification Blocked (Round {{CURRENT_ROUND}})\n\nAfter Round 0, only Codex can modify the Goal Tracker. Include a Goal Tracker Update Request in your summary file: {{SUMMARY_FILE}}",
+        &[
+            ("CURRENT_ROUND", current_round.to_string()),
+            ("SUMMARY_FILE", summary_file.to_string()),
+        ],
+    )
+}
+
+fn todos_bash_blocked_reason() -> String {
+    render_template_or_fallback(
+        "block/todos-file-access.md",
+        "# Todos File Access Blocked\n\nDo NOT create or access round-*-todos.md files. Use the native Task tools instead.",
+        &[],
+    )
+}
+
+fn plan_backup_protected_reason() -> String {
+    render_template_or_fallback(
+        "block/plan-backup-protected.md",
+        "Writing to plan.md backup is not allowed during RLCR loop.",
+        &[],
+    )
+}
+
+fn protected_state_reason(path_lower: &str) -> String {
+    if path_lower.contains(".humanize/pr-loop/") {
+        return render_template_or_fallback(
+            "block/pr-loop-state-modification.md",
+            "# PR Loop State File Modification Blocked\n\nYou cannot modify state.md in .humanize/pr-loop/.",
+            &[],
+        );
+    }
+
+    if path_lower.ends_with("finalize-state.md") {
+        return render_template_or_fallback(
+            "block/finalize-state-file-modification.md",
+            "# Finalize State File Modification Blocked\n\nYou cannot modify finalize-state.md.",
+            &[],
+        );
+    }
+
+    render_template_or_fallback(
+        "block/state-file-modification.md",
+        "# State File Modification Blocked\n\nYou cannot modify state.md.",
+        &[],
+    )
+}
+
+fn protected_expansion_reason(cmd_trimmed: &str) -> String {
+    format!(
+        "Command uses shell expansion while targeting protected loop files, which is not allowed during an active loop: {}",
+        cmd_trimmed
+    )
+}
+
+fn find_active_pr_loop(loop_base_dir: &Path) -> Option<PathBuf> {
+    let newest_dir = newest_session_dir(loop_base_dir)?;
+    newest_dir.join("state.md").is_file().then_some(newest_dir)
 }
 
 /// Validate Edit tool access.
@@ -587,11 +936,7 @@ pub(super) fn validate_edit(input: &HookInput) -> HookOutput {
 
 /// Validate Bash command execution.
 ///
-/// Implements parity with loop-bash-validator.sh:
-/// 1. Block git add targeting .humanize
-/// 2. Block file redirections to protected files
-/// 3. Block sed -i for protected files
-/// 4. Block dangerous shell patterns
+/// Implements parity with loop-bash-validator.sh for protected RLCR/PR loop files.
 pub(super) fn validate_bash(input: &HookInput) -> HookOutput {
     let command = match get_command(input) {
         Some(c) => c,
@@ -601,99 +946,133 @@ pub(super) fn validate_bash(input: &HookInput) -> HookOutput {
     let cmd_lower = command.to_lowercase();
     let cmd_trimmed = command.trim();
 
-    // Safe command patterns
-    let safe_patterns = [
-        "git status",
-        "git log",
-        "git diff",
-        "git branch",
-        "git rev-parse",
-        "cargo build",
-        "cargo check",
-        "cargo test",
-        "cargo clippy",
-        "cargo fmt --check",
-        "ls ",
-        "cat ",
-        "head ",
-        "tail ",
-        "grep ",
-        "which ",
-        "pwd",
-        "rg ",
-        "find ",
-        "wc ",
-        "sed -n",
-        "git show",
-        "git remote",
-        "git ls-files",
-    ];
+    if is_safe_bash_command(&cmd_lower) {
+        return HookOutput::allow();
+    }
 
-    for pattern in &safe_patterns {
-        if cmd_lower.starts_with(&pattern.to_lowercase()) && !bash_has_control_operators(&cmd_lower)
-        {
+    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+    let Some(project_root) = project_root else {
+        return HookOutput::allow();
+    };
+
+    let active_loop_dir = humanize_core::state::find_active_loop(
+        &project_root.join(".humanize/rlcr"),
+        input.session_id.as_deref(),
+    );
+    let active_pr_loop_dir = find_active_pr_loop(&project_root.join(".humanize/pr-loop"));
+
+    if active_loop_dir.is_none() && active_pr_loop_dir.is_none() {
+        return HookOutput::allow();
+    }
+
+    let current_round = if let Some(loop_dir) = &active_loop_dir {
+        let Some(state_file) = humanize_core::state::resolve_active_state_file(loop_dir) else {
             return HookOutput::allow();
+        };
+        let Ok(state_content) = std::fs::read_to_string(&state_file) else {
+            return HookOutput::allow();
+        };
+        let Ok(state) = humanize_core::state::State::from_markdown_strict(&state_content) else {
+            return HookOutput::block("Malformed state file, blocking operation for safety");
+        };
+        Some(state.current_round)
+    } else {
+        None
+    };
+
+    if git_adds_humanize(&cmd_lower, &project_root) {
+        return HookOutput::block(git_add_humanize_blocked_reason());
+    }
+
+    if has_safe_command_blockers(&cmd_lower) && contains_protected_pattern(&cmd_lower).is_some() {
+        if let Some(loop_dir) = &active_loop_dir {
+            if (cmd_lower.contains("state.md") || cmd_lower.contains("finalize-state.md"))
+                && is_cancel_authorized(loop_dir, &cmd_lower)
+            {
+                return HookOutput::allow();
+            }
+        }
+
+        if cmd_lower.contains("${") || regex_is_match(r"\$[a-z_][a-z0-9_]*", &cmd_lower) {
+            return HookOutput::block(protected_expansion_reason(cmd_trimmed));
         }
     }
 
-    // Block git add targeting .humanize or broad add patterns
-    if git_adds_humanize(cmd_trimmed) {
-        return HookOutput::block(format!(
-            "Adding .humanize files to git, or using broad `git add` patterns during an active loop, is not allowed: {}",
-            cmd_trimmed
-        ));
-    }
-
-    if command_modifies_protected_file(&cmd_lower) {
-        if let Some(protected) = contains_protected_pattern(&cmd_lower) {
-            let reason = if protected.contains("summary") {
-                render_template_or_fallback(
-                    "block/summary-bash-write.md",
-                    "# Bash Write Blocked: Use Write or Edit Tool\n\nDo not use Bash commands to modify summary files.\n\nUse the Write or Edit tool instead: {{CORRECT_PATH}}",
-                    &[("CORRECT_PATH", "the current round summary file".to_string())],
-                )
-            } else if protected.contains("prompt") {
-                render_template_or_fallback(
-                    "block/prompt-file-write.md",
-                    "# Prompt File Write Blocked\n\nYou cannot write to prompt files.",
-                    &[],
-                )
-            } else if protected.contains("state") {
-                render_template_or_fallback(
-                    "block/state-file-modification.md",
-                    "# State File Modification Blocked\n\nYou cannot modify `state.md`.",
-                    &[],
-                )
-            } else {
-                format!(
-                    "Cannot modify protected loop file '{}' via Bash: {}",
-                    protected, cmd_trimmed
-                )
-            };
-            return HookOutput::block(reason);
+    if let Some(loop_dir) = &active_loop_dir {
+        if command_modifies_file(&cmd_lower, "finalize-state\\.md") {
+            if is_cancel_authorized(loop_dir, &cmd_lower) {
+                return HookOutput::allow();
+            }
+            return HookOutput::block(protected_state_reason("finalize-state.md"));
         }
-    }
 
-    // Dangerous patterns
-    let dangerous_patterns = [
-        "rm ", "rm\t", "rmdir", "mv ", "mv\t", "cp ", "2>", "chmod", "chown", "mkdir -p", "nohup",
-        "disown", "bg ", "fg ",
-    ];
+        if command_modifies_file(&cmd_lower, "state\\.md") {
+            if is_cancel_authorized(loop_dir, &cmd_lower) {
+                return HookOutput::allow();
+            }
+            return HookOutput::block(protected_state_reason("state.md"));
+        }
 
-    for pattern in &dangerous_patterns {
-        if cmd_trimmed.contains(pattern) {
-            return HookOutput::block(format!(
-                "Command contains potentially dangerous pattern '{}': {}",
-                pattern, cmd_trimmed
+        if command_modifies_file(&cmd_lower, "\\.humanize/rlcr(/[^/]+)?/plan\\.md") {
+            return HookOutput::block(plan_backup_protected_reason());
+        }
+
+        if command_modifies_file(&cmd_lower, "goal-tracker\\.md") {
+            let round = current_round.unwrap_or(0);
+            if round == 0 {
+                let correct_path = loop_dir.join("goal-tracker.md");
+                return HookOutput::block(goal_tracker_bash_blocked_reason(
+                    &correct_path.display().to_string(),
+                ));
+            }
+
+            let summary_file = loop_dir.join(format!("round-{}-summary.md", round));
+            return HookOutput::block(goal_tracker_blocked_reason(
+                round,
+                &summary_file.display().to_string(),
             ));
         }
+
+        if command_modifies_file(&cmd_lower, "round-[0-9]+-prompt\\.md") {
+            return HookOutput::block(render_template_or_fallback(
+                "block/prompt-file-write.md",
+                "# Prompt File Write Blocked\n\nYou cannot write to round-*-prompt.md files.",
+                &[],
+            ));
+        }
+
+        if command_modifies_file(&cmd_lower, "round-[0-9]+-summary\\.md") {
+            let summary_path =
+                loop_dir.join(format!("round-{}-summary.md", current_round.unwrap_or(0)));
+            return HookOutput::block(summary_bash_blocked_reason(
+                &summary_path.display().to_string(),
+            ));
+        }
+
+        if command_modifies_file(&cmd_lower, "round-[0-9]+-todos\\.md") {
+            return HookOutput::block(todos_bash_blocked_reason());
+        }
     }
 
-    if bash_has_control_operators(&cmd_lower) {
-        return HookOutput::block(format!(
-            "Command contains shell control operators that are not allowed in loop Bash validation: {}",
-            cmd_trimmed
-        ));
+    if active_pr_loop_dir.is_some() {
+        if command_modifies_file(&cmd_lower, "\\.humanize/pr-loop(/[^/]+)?/state\\.md")
+            || command_modifies_file(&cmd_lower, "state\\.md")
+        {
+            return HookOutput::block(protected_state_reason(".humanize/pr-loop/state.md"));
+        }
+
+        for pattern in PR_LOOP_READONLY_PATTERNS {
+            if command_modifies_file(
+                &cmd_lower,
+                &format!("\\.humanize/pr-loop(/[^/]+)?/{pattern}"),
+            ) || command_modifies_file(&cmd_lower, pattern)
+            {
+                return HookOutput::block(pr_loop_readonly_reason());
+            }
+        }
     }
 
     HookOutput::allow()
@@ -853,4 +1232,122 @@ fn extract_state_yaml_mapping(state_content: &str) -> std::result::Result<serde_
     let yaml_content = &rest[..end_pos];
     let yaml_value: serde_yaml::Value = serde_yaml::from_str(yaml_content).map_err(|_| ())?;
     yaml_value.as_mapping().cloned().ok_or(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn run(cmd: &mut Command) {
+        let status = cmd.status().unwrap();
+        assert!(status.success());
+    }
+
+    fn init_git_repo() -> TempDir {
+        let tempdir = tempfile::tempdir().unwrap();
+        run(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tempdir.path()));
+        run(Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(tempdir.path()));
+        run(Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(tempdir.path()));
+        tempdir
+    }
+
+    #[test]
+    fn command_modifies_file_detects_dangerous_variants() {
+        assert!(command_modifies_file("rm state.md", "state\\.md"));
+        assert!(command_modifies_file("mv state.md /tmp/foo", "state\\.md"));
+        assert!(command_modifies_file("echo bad > state.md", "state\\.md"));
+        assert!(command_modifies_file(
+            "sed -i 's/x/y/' state.md",
+            "state\\.md"
+        ));
+        assert!(command_modifies_file("sh -c 'rm state.md'", "state\\.md"));
+        assert!(command_modifies_file("exec 3>state.md", "state\\.md"));
+
+        assert!(!command_modifies_file("cat state.md", "state\\.md"));
+        assert!(!command_modifies_file("git status", "state\\.md"));
+        assert!(!command_modifies_file("ls -la", "state\\.md"));
+        assert!(!command_modifies_file("grep pattern file", "state\\.md"));
+    }
+
+    #[test]
+    fn git_adds_humanize_detects_direct_and_broad_patterns() {
+        let repo = init_git_repo();
+        std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
+
+        assert!(git_adds_humanize(r#"git add ".humanize""#, repo.path()));
+        assert!(git_adds_humanize("git add -A", repo.path()));
+        assert!(git_adds_humanize("git add -f .", repo.path()));
+        assert!(git_adds_humanize("git -C subdir add --all", repo.path()));
+
+        std::fs::write(repo.path().join(".gitignore"), ".humanize/\n").unwrap();
+        run(Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path()));
+        run(Command::new("git")
+            .args(["commit", "-q", "-m", "ignore humanize"])
+            .current_dir(repo.path()));
+
+        assert!(!git_adds_humanize("git add .", repo.path()));
+    }
+
+    #[test]
+    fn cancel_authorized_with_signal_and_exact_mv() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let loop_dir = tempdir.path().join("2026-03-20_00-00-00");
+        std::fs::create_dir_all(&loop_dir).unwrap();
+        std::fs::write(loop_dir.join(".cancel-requested"), "").unwrap();
+        std::fs::write(loop_dir.join("state.md"), "---\n---\n").unwrap();
+
+        assert!(is_cancel_authorized(
+            &loop_dir,
+            &format!(
+                "mv {}/state.md {}/cancel-state.md",
+                loop_dir.display(),
+                loop_dir.display()
+            )
+            .to_lowercase()
+        ));
+    }
+
+    #[test]
+    fn cancel_unauthorized_without_signal_or_with_injection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let loop_dir = tempdir.path().join("2026-03-20_00-00-00");
+        std::fs::create_dir_all(&loop_dir).unwrap();
+        std::fs::write(loop_dir.join("state.md"), "---\n---\n").unwrap();
+
+        let valid_mv = format!(
+            "mv {}/state.md {}/cancel-state.md",
+            loop_dir.display(),
+            loop_dir.display()
+        )
+        .to_lowercase();
+        assert!(!is_cancel_authorized(&loop_dir, &valid_mv));
+
+        std::fs::write(loop_dir.join(".cancel-requested"), "").unwrap();
+        assert!(!is_cancel_authorized(
+            &loop_dir,
+            &format!("{valid_mv}; echo pwned")
+        ));
+        assert!(!is_cancel_authorized(
+            &loop_dir,
+            &format!("mv $(pwd)/state.md {}/cancel-state.md", loop_dir.display()).to_lowercase()
+        ));
+        assert!(!is_cancel_authorized(
+            &loop_dir,
+            &format!(
+                "mv '{}/state.md' \"{}/cancel-state.md\"",
+                loop_dir.display(),
+                loop_dir.display()
+            )
+            .to_lowercase()
+        ));
+    }
 }
