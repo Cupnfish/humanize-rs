@@ -3,7 +3,7 @@
 //! This module provides safe file operations with path validation
 //! to prevent security issues like path traversal and symlink attacks.
 
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::constants::MAX_JSON_DEPTH;
 
@@ -93,11 +93,12 @@ pub fn validate_path(path: &str, options: &PathValidationOptions) -> Result<Path
     // Check symlinks if we have a repo root
     if let Some(ref repo_root) = options.repo_root {
         let full_path = repo_root.join(&parsed);
+        let canonical_repo_root = canonicalize_for_boundary_check(repo_root);
 
         // Check if path resolves outside repo (symlink check)
         if full_path.exists() {
             if let Ok(canonical) = full_path.canonicalize() {
-                if !canonical.starts_with(repo_root) {
+                if !canonical.starts_with(&canonical_repo_root) {
                     return Err(FsError::OutsideRepository(path.to_string()));
                 }
             }
@@ -105,6 +106,10 @@ pub fn validate_path(path: &str, options: &PathValidationOptions) -> Result<Path
     }
 
     Ok(parsed)
+}
+
+fn canonicalize_for_boundary_check(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Validate JSON depth to prevent DoS attacks.
@@ -302,6 +307,7 @@ pub fn is_allowlisted_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_validate_path_relative() {
@@ -325,6 +331,22 @@ mod tests {
             validate_path("../../../etc/passwd", &options),
             Err(FsError::PathTraversal(_))
         ));
+    }
+
+    #[test]
+    fn test_validate_path_accepts_existing_file_with_noncanonical_repo_root() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo_root = tempdir.path().join("repo");
+        fs::create_dir_all(repo_root.join("docs")).unwrap();
+        fs::create_dir_all(repo_root.join("work")).unwrap();
+        fs::write(repo_root.join("docs/plan.md"), "plan\n").unwrap();
+
+        let options = PathValidationOptions {
+            repo_root: Some(repo_root.join("work").join("..")),
+            ..PathValidationOptions::default()
+        };
+
+        assert!(validate_path("docs/plan.md", &options).is_ok());
     }
 
     #[test]

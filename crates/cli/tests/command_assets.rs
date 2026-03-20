@@ -109,10 +109,22 @@ fn transport_normalized_commands_match_legacy_specs() {
     let repo_root = manifest_dir.join("../..");
 
     let pairs = [
-        ("commands/start-rlcr-loop.md", "humanize/commands/start-rlcr-loop.md"),
-        ("commands/start-pr-loop.md", "humanize/commands/start-pr-loop.md"),
-        ("commands/cancel-rlcr-loop.md", "humanize/commands/cancel-rlcr-loop.md"),
-        ("commands/cancel-pr-loop.md", "humanize/commands/cancel-pr-loop.md"),
+        (
+            "commands/start-rlcr-loop.md",
+            "humanize/commands/start-rlcr-loop.md",
+        ),
+        (
+            "commands/start-pr-loop.md",
+            "humanize/commands/start-pr-loop.md",
+        ),
+        (
+            "commands/cancel-rlcr-loop.md",
+            "humanize/commands/cancel-rlcr-loop.md",
+        ),
+        (
+            "commands/cancel-pr-loop.md",
+            "humanize/commands/cancel-pr-loop.md",
+        ),
     ];
 
     for (current, legacy) in pairs {

@@ -33,7 +33,9 @@ fn cancel_rlcr_native(force: bool) -> Result<()> {
         finalize_state_file
     } else {
         println!("NO_ACTIVE_LOOP");
-        println!("No active RLCR loop found. The loop directory exists but no active state file is present.");
+        println!(
+            "No active RLCR loop found. The loop directory exists but no active state file is present."
+        );
         std::process::exit(1);
     };
 
@@ -93,7 +95,9 @@ fn cancel_pr_native(_force: bool) -> Result<()> {
     let state_file = loop_dir.join("state.md");
     if !state_file.exists() {
         println!("NO_ACTIVE_LOOP");
-        println!("No active PR loop found. The loop directory exists but no active state file is present.");
+        println!(
+            "No active PR loop found. The loop directory exists but no active state file is present."
+        );
         std::process::exit(1);
     }
     let state_content = fs::read_to_string(&state_file).unwrap_or_default();
@@ -215,12 +219,11 @@ fn resume_pr_native() -> Result<()> {
             std::process::exit(3);
         }
     };
-    let state = humanize_core::state::State::from_markdown(&state_content)
-        .unwrap_or_else(|_| {
-            println!("MALFORMED_STATE");
-            println!("Malformed PR loop state file, cannot resume safely");
-            std::process::exit(3);
-        });
+    let state = humanize_core::state::State::from_markdown(&state_content).unwrap_or_else(|_| {
+        println!("MALFORMED_STATE");
+        println!("Malformed PR loop state file, cannot resume safely");
+        std::process::exit(3);
+    });
 
     let (phase, action_path, action_content) = pr_resume_action(&loop_dir, &state);
 
