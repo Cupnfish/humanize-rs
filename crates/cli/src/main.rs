@@ -2,7 +2,7 @@
 //!
 //! Command-line interface for the Humanize runtime used by Claude Code and Droid.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -111,9 +111,20 @@ enum Commands {
         #[arg(long)]
         show: bool,
 
-        /// Remove Humanize assets previously installed by init
-        #[arg(long)]
+        /// Legacy compatibility flag. Prefer `humanize uninstall`.
+        #[arg(long, hide = true)]
         uninstall: bool,
+    },
+
+    /// Remove host integration previously installed by init
+    Uninstall {
+        /// Remove from the user's host config directory instead of the current project
+        #[arg(short = 'g', long)]
+        global: bool,
+
+        /// Target host
+        #[arg(long, value_enum, default_value = "claude")]
+        target: InitTarget,
     },
 
     /// Diagnose Humanize CLI and host plugin sync status
@@ -338,8 +349,10 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    if !matches!(cli.command, Commands::Init { .. } | Commands::Doctor { .. })
-        && should_emit_plugin_sync_warnings()
+    if !matches!(
+        cli.command,
+        Commands::Init { .. } | Commands::Uninstall { .. } | Commands::Doctor { .. }
+    ) && should_emit_plugin_sync_warnings()
     {
         init::warn_if_plugin_version_mismatch();
     }
@@ -368,7 +381,17 @@ fn run() -> Result<()> {
             target,
             show,
             uninstall,
-        } => init::run(target, global, show, uninstall),
+        } => {
+            if uninstall {
+                if show {
+                    bail!("`--show` and `--uninstall` cannot be used together.");
+                }
+                init::run_uninstall(target, global)
+            } else {
+                init::run(target, global, show)
+            }
+        }
+        Commands::Uninstall { global, target } => init::run_uninstall(target, global),
         Commands::Doctor { target } => init::run_doctor(target),
     }
 }
@@ -409,5 +432,40 @@ mod tests {
         assert_eq!(parse_sync_warning_override(Some("auto")), None);
         assert_eq!(parse_sync_warning_override(Some("unexpected")), None);
         assert_eq!(parse_sync_warning_override(None), None);
+    }
+
+    #[test]
+    fn uninstall_command_parses_target_and_scope() {
+        let cli = Cli::try_parse_from(["humanize", "uninstall", "--global", "--target", "droid"])
+            .expect("uninstall command should parse");
+
+        match cli.command {
+            Commands::Uninstall { global, target } => {
+                assert!(global);
+                assert_eq!(target, InitTarget::Droid);
+            }
+            _ => panic!("unexpected command parsed"),
+        }
+    }
+
+    #[test]
+    fn init_legacy_uninstall_flag_still_parses() {
+        let cli = Cli::try_parse_from(["humanize", "init", "--uninstall"])
+            .expect("legacy init --uninstall should parse");
+
+        match cli.command {
+            Commands::Init {
+                global,
+                target,
+                show,
+                uninstall,
+            } => {
+                assert!(!global);
+                assert_eq!(target, InitTarget::Claude);
+                assert!(!show);
+                assert!(uninstall);
+            }
+            _ => panic!("unexpected command parsed"),
+        }
     }
 }

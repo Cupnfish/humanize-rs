@@ -148,6 +148,7 @@ Validate:
 ```bash
 humanize init --global --show
 humanize doctor
+humanize uninstall --global
 ```
 
 Droid:
@@ -167,10 +168,12 @@ Validate:
 ```bash
 humanize init --global --target droid --show
 humanize doctor --target droid
+humanize uninstall --global --target droid
 ```
 
 The `humanize` executable still comes from `PATH`.
 `humanize init` is now the primary installation path.
+Use `humanize uninstall` for the reverse host-side cleanup. This removes the installed host plugin bundle for the selected target/scope, including host-managed skills and slash commands.
 
 ## Local Development
 

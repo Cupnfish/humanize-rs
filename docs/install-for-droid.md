@@ -30,6 +30,16 @@ This command:
 The `humanize` binary itself is not bundled into the plugin.
 It must already be available on `PATH`.
 
+## Uninstall
+
+To reverse the host-side install for Droid:
+
+```bash
+humanize uninstall --global --target droid
+```
+
+This removes the Humanize plugin bundle from Droid user scope, including host-managed skills and slash commands.
+
 ## Version Sync
 
 `humanize init --global --target droid` writes a sync stamp under `~/.factory/`.
@@ -49,4 +59,5 @@ cargo xtask verify-version-sync
 humanize --help
 humanize init --global --target droid --show
 humanize doctor --target droid
+humanize uninstall --global --target droid
 ```

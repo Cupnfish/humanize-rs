@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,15 @@ const MARKETPLACE_NAME: &str = "humania-rs";
 const PLUGIN_NAME: &str = "humanize-rs";
 const LEGACY_CLAUDE_PLUGIN_NAME: &str = "humanize";
 const STAMP_FILE: &str = "humanize-plugin-sync.json";
+const CLAUDE_COMPAT_COMMANDS: &[&str] = &[
+    "cancel-pr-loop.md",
+    "cancel-rlcr-loop.md",
+    "gen-plan.md",
+    "resume-pr-loop.md",
+    "resume-rlcr-loop.md",
+    "start-pr-loop.md",
+    "start-rlcr-loop.md",
+];
 
 #[derive(Debug, Clone)]
 struct MarketplaceRecord {
@@ -85,11 +95,7 @@ impl InstallScope {
     }
 }
 
-pub fn run(target: InitTarget, global: bool, show: bool, uninstall: bool) -> Result<()> {
-    if show && uninstall {
-        bail!("`--show` and `--uninstall` cannot be used together.");
-    }
-
+pub fn run(target: InitTarget, global: bool, show: bool) -> Result<()> {
     let scope = InstallScope::from_global(global);
     let project_root = project_root_for_scope(scope)?;
 
@@ -97,11 +103,13 @@ pub fn run(target: InitTarget, global: bool, show: bool, uninstall: bool) -> Res
         return show_config(target, scope, project_root.as_deref());
     }
 
-    if uninstall {
-        return uninstall_plugin(target, scope, project_root.as_deref());
-    }
-
     install_plugin(target, scope, project_root.as_deref())
+}
+
+pub fn run_uninstall(target: InitTarget, global: bool) -> Result<()> {
+    let scope = InstallScope::from_global(global);
+    let project_root = project_root_for_scope(scope)?;
+    uninstall_plugin(target, scope, project_root.as_deref())
 }
 
 pub fn warn_if_plugin_version_mismatch() {
@@ -243,7 +251,7 @@ fn install_plugin(
     };
     if matches!(target, InitTarget::Claude) {
         let installed_version = existing.version.as_deref().unwrap_or(current_version);
-        remove_claude_compat_commands(&marketplace_name, installed_version)?;
+        remove_claude_compat_commands(Some(&marketplace_name), Some(installed_version))?;
     }
     write_stamp(target, scope, project_root, &stamp)?;
 
@@ -320,8 +328,11 @@ fn show_config(target: InitTarget, scope: InstallScope, project_root: Option<&Pa
     println!("  humanize init --global --target droid");
     println!("  humanize init --show");
     println!("  humanize init --global --show");
-    println!("  humanize init --uninstall");
-    println!("  humanize init --global --uninstall");
+    println!("  humanize uninstall");
+    println!("  humanize uninstall --global");
+    println!("  humanize uninstall --target droid");
+    println!("  humanize uninstall --global --target droid");
+    println!("  Legacy: humanize init --uninstall");
 
     Ok(())
 }
@@ -396,10 +407,15 @@ fn uninstall_plugin(
 ) -> Result<()> {
     let stamp = read_stamp(target, scope, project_root)?;
     let existing = plugin_install_status_for_scope(target, scope, project_root)?;
+    let stamp_marketplace = stamp.as_ref().map(|stamp| stamp.marketplace_name.clone());
+    let installed_version = existing.version.clone();
     clear_scope_install(target, scope, project_root, stamp.as_ref(), &existing)?;
+    if matches!(target, InitTarget::Claude) {
+        remove_claude_compat_commands(stamp_marketplace.as_deref(), installed_version.as_deref())?;
+    }
 
     println!(
-        "Humanize plugin uninstalled from {} {} scope.\n\n  Restart {} to apply changes.",
+        "Humanize host integration removed from {} {} scope.\n\n  Restart {} to apply changes.",
         host_display_name(target),
         scope.flag(),
         host_display_name(target)
@@ -1216,9 +1232,15 @@ fn print_windows_codex_doctor() {
 
         match humanize_core::codex::detect_codex_binary() {
             Ok(resolution) => {
-                println!("  Resolution:       {} ({})", resolution.launcher, resolution.path.display());
+                println!(
+                    "  Resolution:       {} ({})",
+                    resolution.launcher,
+                    resolution.path.display()
+                );
                 if matches!(resolution.launcher, "cmd-shim" | "powershell-shim") {
-                    println!("  Action:           No action needed. Humanize will invoke the shim automatically.");
+                    println!(
+                        "  Action:           No action needed. Humanize will invoke the shim automatically."
+                    );
                 } else {
                     println!("  Action:           No action needed.");
                 }
@@ -1327,35 +1349,47 @@ fn write_stamp(
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
 }
 
-fn remove_claude_compat_commands(marketplace_name: &str, version: &str) -> Result<()> {
+fn remove_claude_compat_commands(
+    marketplace_name: Option<&str>,
+    version: Option<&str>,
+) -> Result<()> {
     let host_dir = resolve_host_dir(InitTarget::Claude)?;
-    let source_dir = host_dir
-        .join("plugins")
-        .join("cache")
-        .join(marketplace_name)
-        .join(PLUGIN_NAME)
-        .join(version)
-        .join("commands");
-    if !source_dir.is_dir() {
-        return Ok(());
-    }
-
     let destination_dir = host_dir.join("commands");
     if !destination_dir.is_dir() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(&source_dir)
-        .with_context(|| format!("Failed to read {}", source_dir.display()))?
-    {
-        let entry = entry.with_context(|| format!("Failed to read {}", source_dir.display()))?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-            continue;
-        }
+    let mut command_files = BTreeSet::new();
+    for command in CLAUDE_COMPAT_COMMANDS {
+        command_files.insert((*command).to_string());
+    }
 
-        let file_name = entry.file_name();
-        let destination = destination_dir.join(format!("humanize-{}", file_name.to_string_lossy()));
+    if let (Some(marketplace_name), Some(version)) = (marketplace_name, version) {
+        let source_dir = host_dir
+            .join("plugins")
+            .join("cache")
+            .join(marketplace_name)
+            .join(PLUGIN_NAME)
+            .join(version)
+            .join("commands");
+        if source_dir.is_dir() {
+            for entry in fs::read_dir(&source_dir)
+                .with_context(|| format!("Failed to read {}", source_dir.display()))?
+            {
+                let entry =
+                    entry.with_context(|| format!("Failed to read {}", source_dir.display()))?;
+                let path = entry.path();
+                if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                    continue;
+                }
+
+                command_files.insert(entry.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+
+    for file_name in command_files {
+        let destination = destination_dir.join(format!("humanize-{file_name}"));
         if destination.exists() {
             fs::remove_file(&destination)
                 .with_context(|| format!("Failed to remove {}", destination.display()))?;

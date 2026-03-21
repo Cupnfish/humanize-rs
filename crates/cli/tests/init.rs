@@ -68,7 +68,11 @@ impl InitTestEnv {
             "@echo off\r\npwsh -NoProfile -ExecutionPolicy Bypass -File \"%~dp0mock-claude.ps1\" %*\r\n",
         )
         .unwrap();
-        fs::write(bin_dir.join("codex.cmd"), "@echo off\r\necho codex mock\r\n").unwrap();
+        fs::write(
+            bin_dir.join("codex.cmd"),
+            "@echo off\r\necho codex mock\r\n",
+        )
+        .unwrap();
         fs::write(bin_dir.join("mock-claude.ps1"), mock_claude_script()).unwrap();
 
         Self {
@@ -232,6 +236,80 @@ fn init_project_scope_writes_project_stamp_and_refreshes_compat_commands() {
     );
 
     assert!(!env.compat_command("humanize-gen-plan.md").exists());
+}
+
+#[test]
+fn uninstall_global_removes_host_plugin_stamp_and_compat_commands() {
+    let env = InitTestEnv::new();
+
+    let init = env.command().args(["init", "--global"]).output().unwrap();
+    assert!(
+        init.status.success(),
+        "global init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    fs::write(
+        env.compat_command("humanize-start-rlcr-loop.md"),
+        "stale compat wrapper\n",
+    )
+    .unwrap();
+
+    let uninstall = env
+        .command()
+        .args(["uninstall", "--global"])
+        .output()
+        .unwrap();
+    assert!(
+        uninstall.status.success(),
+        "global uninstall failed: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&uninstall.stdout);
+    assert!(stdout.contains("Humanize host integration removed from Claude Code user scope."));
+
+    let state = env.state();
+    let plugins = state.get("plugins").and_then(Value::as_array).unwrap();
+    assert!(
+        plugins.is_empty(),
+        "expected all Humanize plugins removed, state: {state}"
+    );
+    assert!(!env.host_dir.join("humanize-plugin-sync.json").exists());
+    assert!(!env.compat_command("humanize-start-rlcr-loop.md").exists());
+}
+
+#[test]
+fn uninstall_project_scope_removes_project_plugin_and_stamp() {
+    let env = InitTestEnv::new();
+
+    let init = env.command().args(["init"]).output().unwrap();
+    assert!(
+        init.status.success(),
+        "project init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let uninstall = env.command().args(["uninstall"]).output().unwrap();
+    assert!(
+        uninstall.status.success(),
+        "project uninstall failed: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&uninstall.stdout);
+    assert!(stdout.contains("Humanize host integration removed from Claude Code project scope."));
+
+    let state = env.state();
+    let plugins = state.get("plugins").and_then(Value::as_array).unwrap();
+    assert!(
+        plugins.iter().all(|plugin| {
+            plugin.get("scope").and_then(Value::as_str) != Some("project")
+                || plugin.get("id").and_then(Value::as_str) != Some("humanize-rs@humania-rs")
+        }),
+        "expected project-scoped Humanize plugin removed, state: {state}"
+    );
+    assert!(!env.project_stamp().exists());
 }
 
 fn mock_claude_script() -> String {

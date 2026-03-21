@@ -94,6 +94,7 @@ Humanize stores runtime state under `.humanize/`:
 
 `humanize init --global` delegates installation to Claude Code's plugin manager.
 `humanize init --global --target droid` delegates installation to Droid's plugin manager.
+`humanize uninstall --global` and `humanize uninstall --global --target droid` reverse that host-side install for the selected target/scope.
 
 The binary embeds `prompt-template/` internally.
 After each init run, Humanize stores a sync stamp so later CLI runs can warn if the host plugin was last synced by a different CLI version.

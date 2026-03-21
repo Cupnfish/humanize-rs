@@ -42,6 +42,16 @@ humanize init --global --show
 humanize doctor
 ```
 
+## Uninstall
+
+To reverse the host-side install for Claude Code:
+
+```bash
+humanize uninstall --global
+```
+
+This removes the Humanize plugin bundle from Claude Code user scope, including host-managed skills and slash commands.
+
 ### Legacy Manual Plugin Install
 
 From GitHub:
@@ -73,4 +83,5 @@ It must already be available on `PATH`.
 humanize --help
 humanize init --global --show
 humanize doctor
+humanize uninstall --global
 ```

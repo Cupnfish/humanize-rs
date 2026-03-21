@@ -120,6 +120,7 @@ humanize init --global
 ```bash
 humanize init --global --show
 humanize doctor
+humanize uninstall --global
 ```
 
 Droid：
@@ -140,10 +141,12 @@ humanize init --global --target droid
 ```bash
 humanize init --global --target droid --show
 humanize doctor --target droid
+humanize uninstall --global --target droid
 ```
 
 `humanize` 可执行文件仍然来自 `PATH`。
 主安装方式已经切到 `humanize init`。
+需要反向清理宿主侧安装时，用 `humanize uninstall`。它会按指定的 `target/scope` 移除宿主管理的插件包，以及对应的 skill / slash command 等资产。
 
 运行时 binary 已经内嵌提示词模板。
 仓库顶层的 `prompt-template/` 是提示词源文件，`skills/`、`commands/`、`agents/`、`hooks/` 是插件包源文件。
