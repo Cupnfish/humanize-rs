@@ -38,10 +38,9 @@ If any condition fails, skip the pre-check and let the setup command handle path
 
 1. Use the Read tool to read the plan file. If the file does not exist or cannot be read, skip the pre-check and let the setup command handle the error.
 
-2. Use the Task tool to invoke the `humanize:plan-compliance-checker` agent (sonnet model):
+2. Use the Task tool to invoke the `humanize:plan-compliance-checker` agent:
    ```
    Task tool parameters:
-   - model: "sonnet"
    - prompt: Include the plan file content and ask the agent to:
      1. Explore the repository structure (README, CLAUDE.md, main files)
      2. Check if the plan content relates to this repository

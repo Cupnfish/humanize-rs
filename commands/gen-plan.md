@@ -57,10 +57,9 @@ After IO validation passes, check if the draft is relevant to this repository.
 > **Note**: Do not spend too much time on this check. As long as the draft is not completely unrelated to the current project, it passes.
 
 1. Read the input draft file to get its content
-2. Use the Task tool to invoke the `humanize:draft-relevance-checker` agent (haiku model):
+2. Use the Task tool to invoke the `humanize:draft-relevance-checker` agent:
    ```
    Task tool parameters:
-   - model: "haiku"
    - prompt: Include the draft content and ask the agent to:
      1. Explore the repository structure (README, CLAUDE.md, main files)
      2. Analyze if the draft content relates to this repository

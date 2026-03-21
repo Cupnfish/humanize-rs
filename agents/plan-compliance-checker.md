@@ -1,7 +1,6 @@
 ---
 name: plan-compliance-checker
 description: Checks plan relevance and compliance before RLCR loop. Use when validating plan files for start-rlcr-loop command.
-model: sonnet
 tools: Read, Glob, Grep
 ---
 
