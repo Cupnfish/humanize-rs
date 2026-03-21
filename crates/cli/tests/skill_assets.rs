@@ -11,10 +11,11 @@ fn read_skill(path: &str) -> String {
 fn humanize_gen_plan_skill_is_host_driven_with_prepare_only() {
     let skill = read_skill("skills/humanize-gen-plan/SKILL.md");
     assert!(skill.contains("humanize gen-plan --prepare-only"));
-    assert!(skill.contains("via AskUserQuestion"));
-    assert!(skill.contains("using Edit tool"));
-    assert!(!skill.contains("interactive CLI prompts"));
-    assert!(!skill.contains("executes the workflow below end-to-end"));
+    assert!(skill.contains("humanize config merged --json --with-meta"));
+    assert!(skill.contains("humanize ask-codex"));
+    assert!(skill.contains("humanize setup rlcr"));
+    assert!(skill.contains("AskUserQuestion"));
+    assert!(skill.contains("host owns the multi-phase planning conversation"));
 }
 
 #[test]
@@ -30,6 +31,8 @@ fn humanize_rlcr_skill_uses_native_cli_gate() {
 fn umbrella_humanize_skill_points_plan_generation_to_prepare_only_flow() {
     let skill = read_skill("skills/humanize/SKILL.md");
     assert!(skill.contains("humanize gen-plan --prepare-only"));
+    assert!(skill.contains("humanize config merged --json --with-meta"));
+    assert!(skill.contains("humanize ask-codex"));
     assert!(skill.contains("host reasoning plus AskUserQuestion"));
     assert!(skill.contains("humanize gate rlcr"));
     assert!(!skill.contains("{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh"));

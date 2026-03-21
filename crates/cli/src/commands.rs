@@ -1,6 +1,7 @@
 //! Command handlers for the Humanize CLI.
 
 mod ask_codex;
+mod config;
 mod gate;
 mod gen_plan;
 mod hook_validation;
@@ -38,8 +39,8 @@ use crate::hook_input::{
     HookEventKind, HookInput, HookOutput, get_command, get_file_path, read_hook_input,
 };
 use crate::{
-    CancelCommands, GateCommands, HookCommands, MonitorCommands, ResumeCommands, SetupCommands,
-    StopCommands,
+    CancelCommands, ConfigCommands, GateCommands, HookCommands, MonitorCommands, ResumeCommands,
+    SetupCommands, StopCommands,
 };
 
 // Vendored runtime assets live inside the CLI crate so `cargo package` and
@@ -81,9 +82,28 @@ pub fn handle_ask_codex(prompt: &str, model: &str, effort: &str, timeout: u64) -
     ask_codex::handle_ask_codex(prompt, model, effort, timeout)
 }
 
+/// Handle config commands.
+pub fn handle_config(cmd: ConfigCommands) -> Result<()> {
+    config::handle_config(cmd)
+}
+
 /// Handle gen-plan command.
-pub fn handle_gen_plan(input: &str, output: &str, prepare_only: bool) -> Result<()> {
-    gen_plan::handle_gen_plan(input, output, prepare_only)
+pub fn handle_gen_plan(
+    input: &str,
+    output: &str,
+    prepare_only: bool,
+    discussion: bool,
+    direct: bool,
+    auto_start_rlcr_if_converged: bool,
+) -> Result<()> {
+    gen_plan::handle_gen_plan(
+        input,
+        output,
+        prepare_only,
+        discussion,
+        direct,
+        auto_start_rlcr_if_converged,
+    )
 }
 
 use hook_validation::{

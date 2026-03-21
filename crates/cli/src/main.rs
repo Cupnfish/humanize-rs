@@ -82,6 +82,10 @@ enum Commands {
         timeout: u64,
     },
 
+    /// Read merged Humanize configuration
+    #[command(subcommand)]
+    Config(ConfigCommands),
+
     /// Generate implementation plan from draft
     GenPlan {
         /// Input draft file
@@ -95,6 +99,18 @@ enum Commands {
         /// Internal mode: only validate IO and prepare the output scaffold
         #[arg(long, hide = true)]
         prepare_only: bool,
+
+        /// Enable discussion mode for host-driven gen-plan orchestration
+        #[arg(long)]
+        discussion: bool,
+
+        /// Enable direct mode for host-driven gen-plan orchestration
+        #[arg(long)]
+        direct: bool,
+
+        /// Allow auto-start of RLCR after converged planning
+        #[arg(long = "auto-start-rlcr-if-converged")]
+        auto_start_rlcr_if_converged: bool,
     },
 
     /// Install or inspect host plugin integration
@@ -222,6 +238,20 @@ enum SetupCommands {
         /// Timeout for each Codex invocation in seconds
         #[arg(long, default_value = "900")]
         codex_timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Return the merged Humanize config for the current project
+    Merged {
+        /// Include metadata about which optional config layers explicitly set keys
+        #[arg(long)]
+        with_meta: bool,
+
+        /// Emit compact JSON suitable for tooling
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -371,11 +401,22 @@ fn run() -> Result<()> {
             effort,
             timeout,
         } => commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout),
+        Commands::Config(config_cmd) => commands::handle_config(config_cmd),
         Commands::GenPlan {
             input,
             output,
             prepare_only,
-        } => commands::handle_gen_plan(&input, &output, prepare_only),
+            discussion,
+            direct,
+            auto_start_rlcr_if_converged,
+        } => commands::handle_gen_plan(
+            &input,
+            &output,
+            prepare_only,
+            discussion,
+            direct,
+            auto_start_rlcr_if_converged,
+        ),
         Commands::Init {
             global,
             target,

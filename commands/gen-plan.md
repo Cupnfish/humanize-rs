@@ -1,8 +1,11 @@
 ---
 description: "Generate implementation plan from draft document"
-argument-hint: "--input <path/to/draft.md> --output <path/to/plan.md>"
+argument-hint: "--input <path/to/draft.md> --output <path/to/plan.md> [--auto-start-rlcr-if-converged] [--discussion|--direct]"
 allowed-tools:
   - "Bash(humanize gen-plan:*)"
+  - "Bash(humanize ask-codex:*)"
+  - "Bash(humanize setup rlcr:*)"
+  - "Bash(humanize config merged:*)"
   - "Read"
   - "Glob"
   - "Grep"
@@ -15,34 +18,124 @@ hide-from-slash-command-tool: "true"
 
 # Generate Plan from Draft
 
-This command transforms a user's draft document into a well-structured implementation plan with clear goals, acceptance criteria (AC-X format), path boundaries, and feasibility suggestions.
+Read and execute below with ultrathink.
+
+## Hard Constraint: No Coding During Plan Generation
+
+This command MUST ONLY generate a plan document during the planning phases. It MUST NOT implement tasks, modify repository source code, or make commits or PRs while producing the plan.
+
+Permitted writes before any optional auto-start are limited to:
+- the plan output file (`--output`)
+- an optional translated language variant when configured
+
+If `--auto-start-rlcr-if-converged` is enabled, the command MAY immediately set up the RLCR loop with `humanize setup rlcr <output-plan-path>`, but only when the plan is converged, `GEN_PLAN_MODE=discussion`, and there are no pending user decisions. All coding happens after plan generation, not during it.
 
 ## Workflow Overview
 
-1. **IO Validation**: Validate input and output paths and prepare the output scaffold
-2. **Relevance Check**: Verify draft is relevant to this repository
-3. **Draft Analysis**: Analyze draft for clarity, consistency, completeness, and functionality
-4. **Issue Resolution**: Engage user to clarify any issues found
-5. **Plan Generation**: Generate the structured `plan.md`
-6. **Write and Complete**: Update the scaffolded output file and report results
+> **Sequential Execution Constraint**: Execute all phases strictly in order. Do NOT parallelize tool calls across different phases. Each phase must complete before the next one begins.
+
+1. **Execution Mode Setup**: Parse optional behaviors from command arguments
+2. **Load Project Config**: Resolve merged Humanize config defaults for `alternative_plan_language` and `gen_plan_mode`
+3. **IO Validation and Scaffold Preparation**: Validate input and output paths and create the initial output scaffold
+4. **Relevance Check**: Verify draft is relevant to the repository
+5. **Codex First-Pass Analysis**: Use one planning Codex before Claude synthesizes plan details
+6. **Claude Candidate Plan (v1)**: Build an initial plan from draft plus Codex findings
+7. **Iterative Convergence Loop**: Claude and a second Codex iteratively challenge and refine plan reasonability
+8. **Issue and Disagreement Resolution**: Resolve unresolved issues, metrics, and opposite opinions
+9. **Final Plan Generation**: Generate the converged structured `plan.md`
+10. **Write and Complete**: Update the output file, optionally write translated variant, optionally auto-start implementation, and report results
+
+---
+
+## Phase 0: Execution Mode Setup
+
+Parse `$ARGUMENTS` and set:
+- `AUTO_START_RLCR_IF_CONVERGED=true` if `--auto-start-rlcr-if-converged` is present
+- `AUTO_START_RLCR_IF_CONVERGED=false` otherwise
+- `GEN_PLAN_MODE_DISCUSSION=true` if `--discussion` is present
+- `GEN_PLAN_MODE_DIRECT=true` if `--direct` is present
+- If both `--discussion` and `--direct` are present simultaneously, report error `Cannot use --discussion and --direct together` and stop
+
+`AUTO_START_RLCR_IF_CONVERGED=true` allows skipping manual review and immediately running `humanize setup rlcr <output-plan-path>`, but only when `GEN_PLAN_MODE=discussion`, plan convergence is achieved, and no pending user decisions remain. In `direct` mode this condition is never satisfied.
+
+---
+
+## Phase 0.5: Load Project Config
+
+After setting execution mode flags, resolve configuration using the native CLI helper:
+
+```bash
+humanize config merged --json --with-meta
+```
+
+Treat non-zero exit as a configuration error and stop.
+
+The command returns JSON with:
+- `merged`: merged config object
+- `explicit_user_keys`: top-level keys explicitly present in user config
+- `explicit_project_keys`: top-level keys explicitly present in project config
+
+### Values to Extract
+
+Read these values from the returned JSON:
+- `merged.alternative_plan_language`
+- `merged.gen_plan_mode`
+- `merged.chinese_plan` (legacy fallback only)
+- whether `alternative_plan_language` appears in either `explicit_user_keys` or `explicit_project_keys`
+
+### Alternative Language Resolution
+
+Resolve the effective language value with this priority:
+1. If `alternative_plan_language` is explicitly set in user or project config, use that value even if it is empty
+2. Otherwise, if `merged.chinese_plan=true`, treat the effective language as `Chinese`
+3. Otherwise, treat translation as disabled
+
+Normalize the effective language with this mapping table. Matching is case-insensitive and trims whitespace.
+
+| Language   | Code | Suffix |
+|------------|------|--------|
+| Chinese    | zh   | `_zh`  |
+| Korean     | ko   | `_ko`  |
+| Japanese   | ja   | `_ja`  |
+| Spanish    | es   | `_es`  |
+| French     | fr   | `_fr`  |
+| German     | de   | `_de`  |
+| Portuguese | pt   | `_pt`  |
+| Russian    | ru   | `_ru`  |
+| Arabic     | ar   | `_ar`  |
+
+Rules:
+- empty or absent value: disable translation
+- `English` or `en`: disable translation
+- supported language name or code: set `ALT_PLAN_LANGUAGE` and `ALT_PLAN_LANG_CODE`
+- unsupported value: disable translation and log a warning in the final notes
+
+### Gen-Plan Mode Resolution
+
+Resolve `GEN_PLAN_MODE` with this priority:
+1. CLI flags from Phase 0
+2. `merged.gen_plan_mode` when it is `discussion` or `direct`
+3. default to `discussion`
+
+If config provides an invalid `gen_plan_mode` value, treat it as absent and note the warning in the final report.
 
 ---
 
 ## Phase 1: IO Validation and Scaffold Preparation
 
-Execute the prepare step with the provided arguments:
+Run the native helper:
 
 ```bash
 humanize gen-plan --prepare-only $ARGUMENTS
 ```
 
 Handle failures directly:
-- If the command says the input file is missing or empty, report that and stop
-- If the command says the output directory is missing, report that and stop
-- If the command says the output file already exists, report that and stop
-- If the command says the plan template is missing, report that as a plugin/runtime configuration error and stop
+- input file missing or empty -> report and stop
+- output directory missing -> report and stop
+- output file already exists -> report and stop
+- plan template missing -> report plugin/runtime configuration error and stop
 
-On success, the output file now exists and already contains:
+On success, the output file already exists and already contains:
 - the generated plan template skeleton
 - the original draft appended under `--- Original Design Draft Start ---`
 
@@ -65,232 +158,250 @@ After IO validation passes, check if the draft is relevant to this repository.
      2. Analyze if the draft content relates to this repository
      3. Return either `RELEVANT: <reason>` or `NOT_RELEVANT: <reason>`
    ```
-
-3. **If NOT_RELEVANT**:
-   - Report: "The draft content does not appear to be related to this repository."
-   - Show the reason from the relevance check
-   - Stop the command
-
-4. **If RELEVANT**: Continue to Phase 3
+3. If result is `NOT_RELEVANT`:
+   - report that the draft does not appear to be related to this repository
+   - show the reason
+   - stop
+4. If result is `RELEVANT`, continue to Phase 3
 
 ---
 
-## Phase 3: Draft Analysis
+## Phase 3: Codex First-Pass Analysis
+
+After relevance check, invoke Codex BEFORE Claude plan synthesis.
+
+Run:
+
+```bash
+humanize ask-codex "<structured prompt>"
+```
+
+The structured prompt MUST include:
+- repository context
+- raw draft content
+- explicit request to critique assumptions, identify missing requirements, and propose stronger plan directions
+
+Require Codex output to follow this format:
+- `CORE_RISKS:`
+- `MISSING_REQUIREMENTS:`
+- `TECHNICAL_GAPS:`
+- `ALTERNATIVE_DIRECTIONS:`
+- `QUESTIONS_FOR_USER:`
+- `CANDIDATE_CRITERIA:`
+
+Preserve this output as **Codex Analysis v1** and feed it into Claude planning.
+
+If `humanize ask-codex` fails, use AskUserQuestion and let the user choose:
+- retry with updated Codex settings or environment
+- continue with Claude-only planning and explicitly note reduced cross-review confidence
+
+---
+
+## Phase 4: Claude Candidate Plan (v1)
+
+Use draft content plus Codex Analysis v1 to produce an initial candidate plan and issue map.
 
 Deeply analyze the draft for potential issues. Use Explore agents to investigate the codebase.
 
+Alongside candidate plan v1, prepare a concise implementation summary covering:
+- scope
+- system boundaries
+- dependencies
+- known risks
+
 ### Analysis Dimensions
 
-1. **Clarity**: Is the draft's intent and goals clearly expressed?
-   - Are objectives well-defined?
-   - Is the scope clear?
-   - Are terms and concepts unambiguous?
-
-2. **Consistency**: Does the draft contradict itself?
-   - Are requirements internally consistent?
-   - Do different sections align with each other?
-
-3. **Completeness**: Are there missing considerations?
-   - Use Explore agents to investigate parts of the codebase the draft might affect
-   - Identify dependencies, side effects, or related components not mentioned
-   - Check if the draft overlooks important edge cases
-
-4. **Functionality**: Does the design have fundamental flaws?
-   - Would the proposed approach actually work?
-   - Are there technical limitations not addressed?
-   - Could the design negatively impact existing functionality?
+1. **Clarity**
+   - are objectives well-defined
+   - is the scope clear
+   - are terms and concepts unambiguous
+2. **Consistency**
+   - are requirements internally consistent
+   - do different sections align
+3. **Completeness**
+   - investigate parts of the codebase the draft might affect
+   - identify dependencies, side effects, or related components not mentioned
+   - check for overlooked edge cases
+4. **Functionality**
+   - would the proposed approach actually work
+   - are there technical limitations not addressed
+   - could the design negatively impact existing functionality
 
 ### Exploration Strategy
 
 Use the Task tool with `subagent_type: "Explore"` to investigate:
-- Components mentioned in the draft
-- Related files and directories
-- Existing patterns and conventions
-- Dependencies and integrations
+- components mentioned in the draft
+- related files and directories
+- existing patterns and conventions
+- dependencies and integrations
 
 ---
 
-## Phase 4: Issue Resolution
+## Phase 5: Iterative Convergence Loop (Claude <-> Second Codex)
 
-> **Critical**: The draft document contains the most valuable human input. During issue resolution, NEVER discard or override any original draft content. All clarifications should be treated as incremental additions that supplement the draft, not replacements. Keep track of both the original draft statements and the clarified information.
+If `GEN_PLAN_MODE=direct`, skip this entire phase. The plan proceeds directly from candidate plan v1 to Phase 6. Since no second-pass review occurred, set `PLAN_CONVERGENCE_STATUS=partially_converged` and `HUMAN_REVIEW_REQUIRED=true`.
 
-### Step 1: Resolve Analysis Issues
+If `GEN_PLAN_MODE=discussion`, run iterative challenge and refine rounds with a SECOND Codex pass.
 
-If any issues are found during analysis, use AskUserQuestion to clarify with the user.
+### Convergence Round Steps
 
-For each issue category that has problems, present:
-- What the issue is
-- Why it matters
-- Options for resolution (if applicable)
+1. Run:
+   ```bash
+   humanize ask-codex "<review current candidate plan>"
+   ```
+2. The review prompt MUST include:
+   - the current candidate plan
+   - prior disagreements
+   - unresolved items
+3. Require output format:
+   - `AGREE:`
+   - `DISAGREE:`
+   - `REQUIRED_CHANGES:`
+   - `OPTIONAL_IMPROVEMENTS:`
+   - `UNRESOLVED:`
+4. Claude revises the candidate plan to address `REQUIRED_CHANGES`
+5. Claude documents accepted and rejected suggestions with rationale
+6. Maintain a convergence matrix with:
+   - topic
+   - Claude position
+   - second Codex position
+   - resolution status (`resolved`, `needs_user_decision`, `deferred`)
+   - round-to-round delta
 
-Continue this dialogue until all significant issues are resolved or acknowledged by the user.
+### Loop Termination Rules
 
-### Step 2: Confirm Quantitative Metrics
+Repeat convergence rounds until one of the following is true:
+- no `REQUIRED_CHANGES` remain and no high-impact `DISAGREE` remains
+- two consecutive rounds produce no material plan changes
+- maximum 3 rounds reached
 
-After all analysis issues are resolved, check the draft for any quantitative metrics or numeric thresholds, such as:
-- Performance targets: "less than 15GB/s", "under 100ms latency"
-- Size constraints: "below 300KB", "maximum 1MB"
-- Count limits: "more than 10 files", "at least 5 retries"
-- Percentage goals: "95% coverage", "reduce by 50%"
+If maximum rounds are reached with unresolved opposite opinions, carry them to user decision phase explicitly.
 
-For each quantitative metric found, use AskUserQuestion to explicitly confirm with the user:
-- Is this a **hard requirement** that must be achieved for the implementation to be considered successful?
-- Or is this describing an **optimization trend/direction** where improvement toward the target is acceptable even if the exact number is not reached?
-
-Document the user's answer for each metric, as this distinction significantly affects how acceptance criteria should be written in the plan.
+Set convergence state explicitly:
+- `PLAN_CONVERGENCE_STATUS=converged` when convergence conditions are met
+- `PLAN_CONVERGENCE_STATUS=partially_converged` otherwise
 
 ---
 
-## Phase 5: Plan Generation
+## Phase 6: Issue and Disagreement Resolution
 
-Deeply think and generate the plan content following these rules:
+> **Critical**: The draft document contains the most valuable human input. During issue resolution, NEVER discard or override any original draft content. All clarifications should be treated as incremental additions that supplement the draft, not replacements.
 
-### Plan Structure
+### Step 1: Manual Review Gate
 
-```markdown
-# <Plan Title>
+Decide if manual review can be skipped:
+- if `GEN_PLAN_MODE=direct`, set `HUMAN_REVIEW_REQUIRED=true`
+- else if `AUTO_START_RLCR_IF_CONVERGED=true` and `PLAN_CONVERGENCE_STATUS=converged`, set `HUMAN_REVIEW_REQUIRED=false`
+- otherwise set `HUMAN_REVIEW_REQUIRED=true`
 
-## Goal Description
-<Clear, direct description of what needs to be accomplished>
+If `HUMAN_REVIEW_REQUIRED=false`, skip Step 2 to Step 4 and continue directly to Phase 7.
 
-## Acceptance Criteria
+### Step 1.5: Consolidate Pending User Decisions
 
-Following TDD philosophy, each criterion includes positive and negative tests for deterministic verification.
+Before proceeding, consolidate all unresolved user-facing questions into the plan's `## Pending User Decisions` section:
+- items from `QUESTIONS_FOR_USER` in Codex Analysis v1
+- items with status `needs_user_decision` from the convergence matrix
 
-- AC-1: <First criterion>
-  - Positive Tests (expected to PASS):
-    - <Test case that should succeed when criterion is met>
-    - <Another success case>
-  - Negative Tests (expected to FAIL):
-    - <Test case that should fail/be rejected when working correctly>
-    - <Another failure/rejection case>
-  - AC-1.1: <Sub-criterion if needed>
-    - Positive: <...>
-    - Negative: <...>
-- AC-2: <Second criterion>
-  - Positive Tests: <...>
-  - Negative Tests: <...>
-...
+Deduplicate merged topics. Remove only items clearly resolved during refinement. Every remaining item must be listed as `DEC-N` with `Decision Status: PENDING`.
 
-## Path Boundaries
+### Step 2: Resolve Analysis Issues
 
-Path boundaries define the acceptable range of implementation quality and choices.
+If any issues are found during Codex-first analysis, Claude analysis, or convergence, use AskUserQuestion to clarify with the user.
 
-### Upper Bound (Maximum Acceptable Scope)
-<Affirmative description of the most comprehensive acceptable implementation>
-<This represents completing the goal without over-engineering>
-Example: "The implementation includes X, Y, and Z features with full test coverage"
+For each issue:
+- explain what the issue is
+- explain why it matters
+- provide options for resolution when applicable
 
-### Lower Bound (Minimum Acceptable Scope)
-<Affirmative description of the minimum viable implementation>
-<This represents the least effort that still satisfies all acceptance criteria>
-Example: "The implementation includes core feature X with basic validation"
+Continue until all significant issues are resolved or explicitly acknowledged.
 
-### Allowed Choices
-<Options that are acceptable for implementation decisions>
-- Can use: <technologies, approaches, patterns that are allowed>
-- Cannot use: <technologies, approaches, patterns that are prohibited>
+### Step 3: Confirm Quantitative Metrics
 
-> **Note on Deterministic Designs**: If the draft specifies a highly deterministic design with no choices (e.g., "must use JSON format", "must use algorithm X"), then the path boundaries should reflect this narrow constraint. In such cases, upper and lower bounds may converge to the same point, and "Allowed Choices" should explicitly state that the choice is fixed per the draft specification.
+For each quantitative metric or numeric threshold, use AskUserQuestion to confirm whether it is:
+- a **hard requirement**
+- or an **optimization trend or direction**
 
-## Feasibility Hints and Suggestions
+Document the user's answer and carry it into acceptance criteria.
 
-> **Note**: This section is for reference and understanding only. These are conceptual suggestions, not prescriptive requirements.
+### Step 4: Resolve Unresolved Claude/Codex Disagreements
 
-### Conceptual Approach
-<Text description, pseudocode, or diagrams showing ONE possible implementation path>
+For every item marked `needs_user_decision`, explicitly ask the user to decide.
 
-### Relevant References
-<Code paths and concepts that might be useful>
-- <path/to/relevant/component> - <brief description>
+After the user answers:
+- update the convergence matrix
+- update `## Pending User Decisions`
+- resolve or annotate any affected sections of the candidate plan
 
-## Dependencies and Sequence
+---
 
-### Milestones
-1. <Milestone 1>: <Description>
-   - Phase A: <...>
-   - Phase B: <...>
-2. <Milestone 2>: <Description>
-   - Step 1: <...>
-   - Step 2: <...>
+## Phase 7: Final Plan Generation
 
-<Describe relative dependencies between components, not time estimates>
+Generate the final `plan.md` using:
+- the original draft
+- repository context
+- Codex Analysis v1
+- the converged candidate plan
+- all user clarifications
+- all metric interpretations
 
-## Implementation Notes
+### Plan Requirements
 
-### Code Style Requirements
-- Implementation code and comments must NOT contain plan-specific terminology such as "AC-", "Milestone", "Step", "Phase", or similar workflow markers
-- These terms are for plan documentation only, not for the resulting codebase
-- Use descriptive, domain-appropriate naming in code instead
+The final plan MUST:
+- preserve all meaningful information from the draft
+- treat clarifications as additive, not replacements
+- follow the plan template structure
+- include acceptance criteria using `AC-X` or `AC-X.Y`
+- include positive and negative tests for each acceptance criterion
+- include path boundaries
+- include dependencies and milestones
+- include implementation notes telling engineers not to use plan markers such as `AC-`, `Milestone`, `Step`, or `Phase` inside production code or comments
+- include task routing tags when a task breakdown is present
+- include a `## Claude-Codex Deliberation` section summarizing agreements, resolved disagreements, and convergence status
+- include a `## Pending User Decisions` section reflecting the final resolved or unresolved state
+
+---
+
+## Phase 8: Write and Complete
+
+### Step 1: Update the Prepared Output File
+
+Use the Edit tool to replace the template placeholders inside the already prepared output file:
+- keep the original draft section intact at the bottom
+- review the full file for consistency
+- ensure the final file is a superset of original draft plus clarifications
+
+### Step 2: Optional Language Variant
+
+If `ALT_PLAN_LANGUAGE` is enabled, write a translated language variant beside the main plan file using the `_<code>` suffix before the extension.
+
+The translated variant must preserve:
+- identifiers such as `AC-*`
+- file paths
+- command names
+- code identifiers
+
+### Step 3: Auto-Start Gate
+
+If `AUTO_START_RLCR_IF_CONVERGED=true`, only auto-start when ALL of the following are true:
+- `GEN_PLAN_MODE=discussion`
+- `PLAN_CONVERGENCE_STATUS=converged`
+- no `PENDING` decisions remain
+
+If those conditions are satisfied, run:
+
+```bash
+humanize setup rlcr <output-plan-path>
 ```
 
-### Generation Rules
+Report that the RLCR loop has been set up.
 
-1. **Terminology**: Use Milestone, Phase, Step, Section. Never use Day, Week, Month, Year, or time estimates.
-2. **No Line Numbers**: Reference code by path only, never by line ranges.
-3. **No Time Estimates**: Do not estimate duration, effort, or code line counts.
-4. **Conceptual Not Prescriptive**: Path boundaries and suggestions guide without mandating.
-5. **AC Format**: All acceptance criteria must use AC-X or AC-X.Y format.
-6. **Clear Dependencies**: Show what depends on what, not when things happen.
-7. **TDD-Style Tests**: Each acceptance criterion must include both positive and negative tests.
-8. **Affirmative Path Boundaries**: Describe upper and lower bounds using affirmative language.
-9. **Respect Deterministic Designs**: If the draft specifies a fixed approach with no choices, reflect this in the plan.
-10. **Code Style Constraint**: The plan must explicitly state that plan markers like `AC-`, `Milestone`, `Step`, and `Phase` do not belong in production code/comments.
-11. **Draft Completeness Requirement**: Preserve all original draft information and treat clarifications as additive.
+If conditions are not satisfied, report why auto-start was skipped.
 
----
+### Step 4: Final Report
 
-## Phase 6: Write and Complete
-
-The output file already contains the plan template structure and the original draft content. Now complete the plan through the following steps:
-
-### Step 1: Update Plan Content
-
-Use the **Edit tool** to update the prepared output file:
-- Replace template placeholders with actual plan content
-- Keep the original draft section intact at the bottom
-- Ensure the final file contains both the structured plan and the original draft for reference
-
-### Step 2: Comprehensive Review
-
-After updating, **read the complete plan file** and verify:
-- The plan is complete and comprehensive
-- All sections are consistent with each other
-- The structured plan aligns with the original draft content
-- No contradictions exist between different parts of the document
-
-If inconsistencies are found, fix them using the Edit tool.
-
-### Step 3: Language Unification
-
-Check if the updated plan file contains multiple languages.
-
-If multiple languages are detected:
-1. Use **AskUserQuestion** to ask the user:
-   - whether they want to unify the language
-   - which language to use for unification
-2. If the user chooses to unify:
-   - translate all content to the chosen language
-   - ensure the meaning and intent remain unchanged
-   - use the Edit tool to apply the translations
-3. If the user declines, leave the document as-is
-
-### Step 4: Report Results
-
-Report to the user:
-- path to the generated plan
-- summary of what was included
-- number of acceptance criteria defined
-- whether language was unified
-
----
-
-## Error Handling
-
-If issues arise during plan generation that require user input:
-- use AskUserQuestion to clarify
-- document user decisions in the plan context
-
-If unable to generate a complete plan:
-- explain what information is missing
-- suggest how the user can improve the draft
+Report:
+- plan output path
+- convergence status
+- whether translation variant was generated
+- whether auto-start was triggered
+- any remaining unresolved user decisions

@@ -37,7 +37,24 @@ struct PreparedGenPlan {
     output_path: PathBuf,
 }
 
-pub(super) fn handle_gen_plan(input: &str, output: &str, prepare_only: bool) -> Result<()> {
+pub(super) fn handle_gen_plan(
+    input: &str,
+    output: &str,
+    prepare_only: bool,
+    discussion: bool,
+    direct: bool,
+    auto_start_rlcr_if_converged: bool,
+) -> Result<()> {
+    if discussion && direct {
+        bail!("Cannot use --discussion and --direct together.");
+    }
+
+    if direct && auto_start_rlcr_if_converged {
+        eprintln!(
+            "NOTE: --auto-start-rlcr-if-converged only triggers in --discussion mode; in --direct mode auto-start will be skipped."
+        );
+    }
+
     if prepare_only {
         prepare_gen_plan_output(input, output)?;
         return Ok(());

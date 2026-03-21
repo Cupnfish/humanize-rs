@@ -66,8 +66,10 @@ Transforms a rough draft document into a structured implementation plan with:
 - dependencies and milestone sequencing
 
 When running inside Claude Code, prefer the `humanize-gen-plan` flow/skill behavior:
+- use `humanize config merged --json --with-meta` to read merged plan-generation defaults
 - use `humanize gen-plan --prepare-only` for deterministic validation and scaffold preparation
-- use host reasoning plus AskUserQuestion for clarification and final authoring
+- use `humanize ask-codex` for first-pass and convergence reviews
+- use host reasoning plus AskUserQuestion for clarification, convergence, and final authoring
 
 The full `humanize gen-plan` command remains available for standalone terminal workflows.
 
@@ -139,7 +141,7 @@ humanize cancel pr
 humanize gen-plan --prepare-only --input path/to/draft.md --output path/to/plan.md
 ```
 
-After scaffold preparation, continue with host-driven analysis, clarification, and plan authoring.
+Then continue with host-driven Codex consultation, convergence, clarification, and plan authoring.
 
 ### Ask Codex (One-shot Consultation)
 

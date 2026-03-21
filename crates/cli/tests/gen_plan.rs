@@ -172,6 +172,73 @@ fn gen_plan_prepare_only_writes_template_and_draft_without_codex() {
     assert!(plan.contains("Need a parser."));
 }
 
+#[test]
+fn gen_plan_prepare_only_accepts_host_orchestration_flags() {
+    let env = GenPlanEnv::new();
+    fs::write(
+        env.project().join("draft.md"),
+        "# Draft\n\nNeed a parser.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(env.project().join("docs")).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "gen-plan",
+            "--input",
+            "draft.md",
+            "--output",
+            "docs/plan.md",
+            "--prepare-only",
+            "--discussion",
+            "--auto-start-rlcr-if-converged",
+        ])
+        .env("PATH", env.path_env())
+        .env("CLAUDE_PROJECT_DIR", env.project().display().to_string())
+        .current_dir(env.project())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn gen_plan_rejects_discussion_and_direct_together() {
+    let env = GenPlanEnv::new();
+    fs::write(
+        env.project().join("draft.md"),
+        "# Draft\n\nNeed a parser.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(env.project().join("docs")).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "gen-plan",
+            "--input",
+            "draft.md",
+            "--output",
+            "docs/plan.md",
+            "--prepare-only",
+            "--discussion",
+            "--direct",
+        ])
+        .env("PATH", env.path_env())
+        .env("CLAUDE_PROJECT_DIR", env.project().display().to_string())
+        .current_dir(env.project())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Cannot use --discussion and --direct together"));
+}
+
 fn make_executable(path: &Path) {
     #[cfg(unix)]
     {
