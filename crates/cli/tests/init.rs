@@ -68,6 +68,7 @@ impl InitTestEnv {
             "@echo off\r\npwsh -NoProfile -ExecutionPolicy Bypass -File \"%~dp0mock-claude.ps1\" %*\r\n",
         )
         .unwrap();
+        fs::write(bin_dir.join("codex.cmd"), "@echo off\r\necho codex mock\r\n").unwrap();
         fs::write(bin_dir.join("mock-claude.ps1"), mock_claude_script()).unwrap();
 
         Self {
@@ -184,6 +185,10 @@ fn init_global_replaces_legacy_claude_plugin_and_doctor_sees_marketplace() {
     ));
     assert!(doctor_stdout.contains("User Plugin:    yes"));
     assert!(doctor_stdout.contains("User Action:    No action needed."));
+    assert!(doctor_stdout.contains("Windows Codex:"));
+    assert!(doctor_stdout.contains("Override:         not set"));
+    assert!(doctor_stdout.contains("Resolution:       cmd-shim"));
+    assert!(doctor_stdout.contains("codex.cmd"));
 
     assert!(!env.compat_command("humanize-gen-plan.md").exists());
 }

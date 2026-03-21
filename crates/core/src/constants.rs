@@ -6,6 +6,9 @@ pub const ENV_CLAUDE_PROJECT_DIR: &str = "CLAUDE_PROJECT_DIR";
 /// Environment variable to bypass Codex sandbox (dangerous).
 pub const ENV_CODEX_BYPASS_SANDBOX: &str = "HUMANIZE_CODEX_BYPASS_SANDBOX";
 
+/// Optional environment variable to override the Codex executable path.
+pub const ENV_CODEX_BIN: &str = "HUMANIZE_CODEX_BIN";
+
 /// Default maximum iterations for RLCR loops.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 42;
 

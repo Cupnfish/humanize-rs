@@ -363,6 +363,34 @@ fn resume_then_stop_still_runs_codex_review() {
     assert!(state.contains("current_round: 4"), "state={state}");
 }
 
+#[test]
+fn missing_codex_binary_blocks_with_retry_message() {
+    let repo = TestRepo::new();
+    repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n- two\n- three\n");
+    repo.write_state(false, 3);
+    repo.write_goal_tracker();
+    fs::write(
+        repo.loop_dir.join("round-3-summary.md"),
+        "# Round 3 Summary\nImplemented some features.\n",
+    )
+    .unwrap();
+
+    let output = Command::new(bin())
+        .args(["stop", "rlcr"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"decision\":\"block\""), "stdout={stdout}");
+    assert!(stdout.contains("Codex review failed."), "stdout={stdout}");
+    assert!(stdout.contains("Codex process IO error"), "stdout={stdout}");
+    assert!(stdout.contains("Please retry the exit."), "stdout={stdout}");
+    assert!(stdout.contains("Loop: Blocked - codex exec failed"), "stdout={stdout}");
+}
+
 fn run(cmd: &mut Command) {
     let status = cmd.status().unwrap();
     assert!(status.success());

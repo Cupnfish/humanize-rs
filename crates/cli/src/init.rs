@@ -132,6 +132,8 @@ pub fn run_doctor(target: Option<InitTarget>) -> Result<()> {
         print_target_doctor(*host)?;
     }
 
+    print_windows_codex_doctor();
+
     Ok(())
 }
 
@@ -1195,6 +1197,42 @@ fn print_scope_doctor(
         "  {label} Action:    {}",
         scope_recommendation(target, scope, install_status, stamp)
     );
+}
+
+fn print_windows_codex_doctor() {
+    #[cfg(windows)]
+    {
+        use humanize_core::constants::ENV_CODEX_BIN;
+
+        println!();
+        println!("Windows Codex:");
+
+        match std::env::var_os(ENV_CODEX_BIN) {
+            Some(value) if !value.is_empty() => {
+                println!("  Override:         {}", PathBuf::from(value).display());
+            }
+            _ => println!("  Override:         not set"),
+        }
+
+        match humanize_core::codex::detect_codex_binary() {
+            Ok(resolution) => {
+                println!("  Resolution:       {} ({})", resolution.launcher, resolution.path.display());
+                if matches!(resolution.launcher, "cmd-shim" | "powershell-shim") {
+                    println!("  Action:           No action needed. Humanize will invoke the shim automatically.");
+                } else {
+                    println!("  Action:           No action needed.");
+                }
+            }
+            Err(err) => {
+                println!("  Resolution:       missing");
+                println!("  Detail:           {}", err);
+                println!(
+                    "  Action:           Install Codex on PATH or set {} to codex.exe/codex.cmd.",
+                    ENV_CODEX_BIN
+                );
+            }
+        }
+    }
 }
 
 fn scope_recommendation(
