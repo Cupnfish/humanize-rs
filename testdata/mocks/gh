@@ -19,6 +19,10 @@ MOCK_GH_PR_STATE="${MOCK_GH_PR_STATE:-OPEN}"
 MOCK_GH_PR_NUMBER="${MOCK_GH_PR_NUMBER:-123}"
 MOCK_GH_HEAD_SHA="${MOCK_GH_HEAD_SHA:-abc123def456}"
 MOCK_GH_LATEST_COMMIT_AT="${MOCK_GH_LATEST_COMMIT_AT:-2026-01-18T10:00:00Z}"
+MOCK_GH_CURRENT_REPO="${MOCK_GH_CURRENT_REPO:-testowner/testrepo}"
+MOCK_GH_PARENT_REPO="${MOCK_GH_PARENT_REPO:-}"
+MOCK_GH_PR_URL="${MOCK_GH_PR_URL:-https://github.com/testowner/testrepo/pull/$MOCK_GH_PR_NUMBER}"
+MOCK_GH_EXPECT_REPO="${MOCK_GH_EXPECT_REPO:-}"
 
 # Parse command
 COMMAND="${1:-}"
@@ -33,6 +37,9 @@ case "$COMMAND" in
                 # Parse flags - PR number may or may not be specified
                 # Handle both: gh pr view 123 --json ... and gh pr view --json ...
                 PR_NUM=""
+                REPO=""
+                FIELDS=""
+                JQ_EXPR="."
                 while [[ $# -gt 0 ]]; do
                     case "$1" in
                         --json)
@@ -41,6 +48,10 @@ case "$COMMAND" in
                             ;;
                         -q|--jq)
                             JQ_EXPR="$2"
+                            shift 2
+                            ;;
+                        --repo)
+                            REPO="$2"
                             shift 2
                             ;;
                         -*)
@@ -55,15 +66,28 @@ case "$COMMAND" in
                     esac
                 done
 
+                if [[ -n "$MOCK_GH_EXPECT_REPO" && -n "$REPO" && "$REPO" != "$MOCK_GH_EXPECT_REPO" ]]; then
+                    exit 1
+                fi
+
                 # Return based on requested fields
                 if [[ "${FIELDS:-}" == "number,url" ]]; then
+                    if [[ "${MOCK_GH_FAIL_PR_AUTODETECT:-}" == "true" ]]; then
+                        exit 1
+                    fi
                     # For number,url query with jq '.number,.url', return newline-separated values
-                    echo "{\"number\": $MOCK_GH_PR_NUMBER, \"url\": \"https://github.com/testowner/testrepo/pull/$MOCK_GH_PR_NUMBER\"}" | jq -r "${JQ_EXPR:-.}"
+                    echo "{\"number\": $MOCK_GH_PR_NUMBER, \"url\": \"$MOCK_GH_PR_URL\"}" | jq -r "${JQ_EXPR:-.}"
                 elif [[ "${FIELDS:-}" == "number" ]]; then
                     echo "{\"number\": $MOCK_GH_PR_NUMBER}" | jq -r "${JQ_EXPR:-.}"
                 elif [[ "${FIELDS:-}" == "state" ]]; then
+                    if [[ "${MOCK_GH_FAIL_PR_STATE:-}" == "true" ]]; then
+                        exit 1
+                    fi
                     echo "{\"state\": \"$MOCK_GH_PR_STATE\"}" | jq -r "${JQ_EXPR:-.}"
                 elif [[ "${FIELDS:-}" == "headRefOid,commits" ]]; then
+                    if [[ "${MOCK_GH_FAIL_PR_COMMIT_INFO:-}" == "true" ]]; then
+                        exit 1
+                    fi
                     echo "{\"headRefOid\": \"$MOCK_GH_HEAD_SHA\", \"commits\": [{\"committedDate\": \"$MOCK_GH_LATEST_COMMIT_AT\"}]}" | jq -r "${JQ_EXPR:-.}"
                 elif [[ "${FIELDS:-}" == "commits" ]]; then
                     echo "{\"commits\": [{\"committedDate\": \"$MOCK_GH_LATEST_COMMIT_AT\"}]}" | jq -r "${JQ_EXPR:-.}"
@@ -133,6 +157,9 @@ case "$COMMAND" in
 
             repos/*/issues/comments/*/reactions)
                 # Return mock comment reactions (more specific - must come first)
+                if [[ "${MOCK_GH_FAIL_COMMENT_REACTIONS:-}" == "true" ]]; then
+                    exit 1
+                fi
                 FIXTURE_FILE="$MOCK_GH_FIXTURES_DIR/comment-reactions.json"
                 if [[ -f "$FIXTURE_FILE" ]]; then
                     cat "$FIXTURE_FILE" | jq -r "${JQ_EXPR:-.}"
@@ -143,6 +170,9 @@ case "$COMMAND" in
 
             repos/*/issues/*/reactions)
                 # Return mock PR/issue reactions
+                if [[ "${MOCK_GH_FAIL_REACTIONS:-}" == "true" ]]; then
+                    exit 1
+                fi
                 FIXTURE_FILE="$MOCK_GH_FIXTURES_DIR/reactions.json"
                 if [[ -f "$FIXTURE_FILE" ]]; then
                     cat "$FIXTURE_FILE" | jq -r "${JQ_EXPR:-.}"
@@ -159,6 +189,9 @@ case "$COMMAND" in
                     echo "null"
                     exit 0
                 fi
+                if [[ "${MOCK_GH_FAIL_ISSUE_COMMENTS:-}" == "true" ]]; then
+                    exit 1
+                fi
                 FIXTURE_FILE="$MOCK_GH_FIXTURES_DIR/issue-comments.json"
                 if [[ -f "$FIXTURE_FILE" ]]; then
                     cat "$FIXTURE_FILE" | jq -r "${JQ_EXPR:-.}"
@@ -169,6 +202,9 @@ case "$COMMAND" in
 
             repos/*/pulls/*/comments)
                 # Return mock review comments
+                if [[ "${MOCK_GH_FAIL_REVIEW_COMMENTS:-}" == "true" ]]; then
+                    exit 1
+                fi
                 FIXTURE_FILE="$MOCK_GH_FIXTURES_DIR/review-comments.json"
                 if [[ -f "$FIXTURE_FILE" ]]; then
                     cat "$FIXTURE_FILE" | jq -r "${JQ_EXPR:-.}"
@@ -179,6 +215,9 @@ case "$COMMAND" in
 
             repos/*/pulls/*/reviews)
                 # Return mock PR review submissions
+                if [[ "${MOCK_GH_FAIL_PR_REVIEWS:-}" == "true" ]]; then
+                    exit 1
+                fi
                 FIXTURE_FILE="$MOCK_GH_FIXTURES_DIR/pr-reviews.json"
                 if [[ -f "$FIXTURE_FILE" ]]; then
                     cat "$FIXTURE_FILE" | jq -r "${JQ_EXPR:-.}"
@@ -202,6 +241,10 @@ case "$COMMAND" in
                 # Parse flags
                 FIELDS=""
                 JQ_EXPR="."
+                CURRENT_OWNER="${MOCK_GH_CURRENT_REPO%%/*}"
+                CURRENT_NAME="${MOCK_GH_CURRENT_REPO##*/}"
+                PARENT_OWNER="${MOCK_GH_PARENT_REPO%%/*}"
+                PARENT_NAME="${MOCK_GH_PARENT_REPO##*/}"
                 while [[ $# -gt 0 ]]; do
                     case "$1" in
                         --json) FIELDS="$2"; shift 2 ;;
@@ -211,11 +254,21 @@ case "$COMMAND" in
                 done
                 # Return mock repo info
                 if [[ "$FIELDS" == "owner" ]]; then
-                    echo '{"owner": {"login": "testowner"}}' | jq -r "$JQ_EXPR"
+                    echo "{\"owner\": {\"login\": \"$CURRENT_OWNER\"}}" | jq -r "$JQ_EXPR"
                 elif [[ "$FIELDS" == "name" ]]; then
-                    echo '{"name": "testrepo"}' | jq -r "$JQ_EXPR"
+                    echo "{\"name\": \"$CURRENT_NAME\"}" | jq -r "$JQ_EXPR"
+                elif [[ "$FIELDS" == "parent" ]]; then
+                    if [[ -n "$MOCK_GH_PARENT_REPO" ]]; then
+                        echo "{\"parent\": {\"owner\": {\"login\": \"$PARENT_OWNER\"}, \"name\": \"$PARENT_NAME\"}}" | jq -r "$JQ_EXPR"
+                    else
+                        echo '{"parent": null}' | jq -r "$JQ_EXPR"
+                    fi
                 else
-                    echo '{"owner": {"login": "testowner"}, "name": "testrepo"}'
+                    if [[ -n "$MOCK_GH_PARENT_REPO" ]]; then
+                        echo "{\"owner\": {\"login\": \"$CURRENT_OWNER\"}, \"name\": \"$CURRENT_NAME\", \"parent\": {\"owner\": {\"login\": \"$PARENT_OWNER\"}, \"name\": \"$PARENT_NAME\"}}"
+                    else
+                        echo "{\"owner\": {\"login\": \"$CURRENT_OWNER\"}, \"name\": \"$CURRENT_NAME\"}"
+                    fi
                 fi
                 ;;
             *)

@@ -263,9 +263,10 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
 
     let start_branch = humanize_core::git::get_current_branch(&project_root)
         .context("Error: Failed to get current branch")?;
-    let current_repo = gh_current_repo(&project_root)?;
-    let pr_number = gh_detect_pr_number(&project_root)?;
-    let pr_state = gh_pr_state(&project_root, pr_number)?;
+    let pr_context = gh_detect_pr_context_for_branch(&project_root, &start_branch)?;
+    let pr_number = pr_context.pr_number;
+    let pr_repo = pr_context.repo;
+    let pr_state = gh_pr_state_in_repo(&project_root, &pr_repo, pr_number).unwrap_or_default();
     if pr_state == "MERGED" {
         bail!("Error: PR #{} has already been merged", pr_number);
     }
@@ -273,15 +274,24 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
         bail!("Error: PR #{} has been closed", pr_number);
     }
 
-    let commit_info = gh_pr_commit_info(&project_root, pr_number)?;
     let active_bots = build_active_bots(&options);
-    let startup = gh_startup_case(
-        &project_root,
-        &current_repo,
-        pr_number,
-        &active_bots,
-        &commit_info.latest_commit_at,
-    )?;
+    let (mut commit_info, commit_info_fallback) =
+        match gh_pr_commit_info_in_repo(&project_root, &pr_repo, pr_number) {
+            Ok(info) => (info, false),
+            Err(err) => {
+                eprintln!(
+                    "Warning: Failed to fetch PR commit info, defaulting startup case to 1: {err}"
+                );
+                (
+                    PrCommitInfo {
+                        latest_commit_sha: humanize_core::git::get_head_sha(&project_root)
+                            .unwrap_or_default(),
+                        latest_commit_at: String::new(),
+                    },
+                    true,
+                )
+            }
+        };
 
     let loop_base_dir = project_root.join(".humanize/pr-loop");
     fs::create_dir_all(&loop_base_dir)?;
@@ -289,47 +299,115 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
     let loop_dir = loop_base_dir.join(&timestamp);
     fs::create_dir_all(&loop_dir)?;
 
+    let initial_comments = gh_fetch_comments_detailed(&project_root, &pr_repo, pr_number);
+
+    let startup = if commit_info_fallback {
+        StartupCaseInfo {
+            case_num: 1,
+            comments: initial_comments.comments.clone(),
+            api_failures: initial_comments.api_failures,
+        }
+    } else {
+        StartupCaseInfo {
+            case_num: compute_startup_case_from_comments(
+                &initial_comments.comments,
+                &active_bots,
+                &commit_info.latest_commit_at,
+            ),
+            comments: initial_comments.comments.clone(),
+            api_failures: initial_comments.api_failures,
+        }
+    };
+
+    if commit_info.latest_commit_sha.is_empty() {
+        commit_info.latest_commit_sha =
+            humanize_core::git::get_head_sha(&project_root).unwrap_or_default();
+    }
+
     let comment_file = loop_dir.join("round-0-pr-comment.md");
-    let comments_md = format_initial_pr_comments(&startup.comments);
+    let comments_md = format_initial_pr_comments(
+        pr_number,
+        &pr_repo,
+        &active_bots,
+        &startup.comments,
+        startup.api_failures,
+    );
     fs::write(&comment_file, comments_md)?;
 
     let mut trigger_comment_id = String::new();
     let mut last_trigger_at = String::new();
     if startup.case_num == 4 || startup.case_num == 5 {
-        let mention = build_bot_mention_string(&active_bots);
-        let body = format!(
-            "{} please review the latest changes (new commits since last review)",
-            mention
-        );
-        let comment_status = Command::new("gh")
-            .args([
-                "pr",
-                "comment",
-                &pr_number.to_string(),
-                "--repo",
-                &current_repo,
-                "--body",
-                &body,
-            ])
-            .current_dir(&project_root)
-            .status()?;
-        if !comment_status.success() {
-            let _ = fs::remove_dir_all(&loop_dir);
-            bail!("Error: Failed to post trigger comment");
+        let current_user = gh_current_user(&project_root).ok();
+        if let Some(user) = current_user.as_deref() {
+            match gh_find_existing_trigger_comment(
+                &project_root,
+                &pr_repo,
+                pr_number,
+                user,
+                &active_bots,
+                &commit_info.latest_commit_at,
+            ) {
+                Ok(Some(trigger)) => {
+                    trigger_comment_id = trigger.id.to_string();
+                    last_trigger_at = trigger.created_at;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!("Warning: Failed to check for existing trigger comment: {err}");
+                }
+            }
         }
 
-        if let Ok(user) = gh_current_user(&project_root) {
-            if let Some((id, created_at)) =
-                gh_find_latest_user_comment(&project_root, &current_repo, pr_number, &user)?
-            {
-                trigger_comment_id = id.to_string();
-                last_trigger_at = created_at;
+        let mention = build_bot_mention_string(&active_bots);
+        if trigger_comment_id.is_empty() {
+            let body = format!(
+                "{} please review the latest changes (new commits since last review)",
+                mention
+            );
+            let comment_status = Command::new("gh")
+                .args([
+                    "pr",
+                    "comment",
+                    &pr_number.to_string(),
+                    "--repo",
+                    &pr_repo,
+                    "--body",
+                    &body,
+                ])
+                .current_dir(&project_root)
+                .status()?;
+            if !comment_status.success() {
+                let _ = fs::remove_dir_all(&loop_dir);
+                bail!("Error: Failed to post trigger comment");
+            }
+
+            if let Some(user) = current_user.as_deref() {
+                if let Some((id, created_at)) =
+                    gh_find_latest_user_comment(&project_root, &pr_repo, pr_number, user)?
+                {
+                    trigger_comment_id = id.to_string();
+                    last_trigger_at = created_at;
+                }
             }
         }
 
         if trigger_comment_id.is_empty() {
             let _ = fs::remove_dir_all(&loop_dir);
             bail!("Error: Could not find trigger comment ID for eyes verification");
+        }
+
+        if active_bots.iter().any(|bot| bot == "claude")
+            && gh_wait_for_claude_eyes(
+                &project_root,
+                &pr_repo,
+                &trigger_comment_id,
+                3,
+                std::time::Duration::from_secs(5),
+            )?
+            .is_none()
+        {
+            let _ = fs::remove_dir_all(&loop_dir);
+            bail!("Error: Claude bot did not respond with eyes reaction");
         }
     }
 
@@ -521,15 +599,21 @@ fn validate_setup_plan_file(
         PlanMode::Snapshot => {}
         PlanMode::SourceClean => {
             if tracked && !plan_status.trim().is_empty() {
-                bail!("Error: --plan-lock source-clean requires tracked plan file to be clean (no modifications)");
+                bail!(
+                    "Error: --plan-lock source-clean requires tracked plan file to be clean (no modifications)"
+                );
             }
         }
         PlanMode::SourceImmutable => {
             if !tracked {
-                bail!("Error: --plan-lock source-immutable requires plan file to be tracked in git");
+                bail!(
+                    "Error: --plan-lock source-immutable requires plan file to be tracked in git"
+                );
             }
             if !plan_status.trim().is_empty() {
-                bail!("Error: --plan-lock source-immutable requires plan file to be clean (no modifications)");
+                bail!(
+                    "Error: --plan-lock source-immutable requires plan file to be clean (no modifications)"
+                );
             }
         }
     }
@@ -565,7 +649,9 @@ fn git_blob_oid(project_root: &Path, plan_file: &str) -> Result<Option<String>> 
     if !output.status.success() {
         return Ok(None);
     }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 fn detect_base_branch(project_root: &Path, requested: Option<&str>) -> Result<String> {

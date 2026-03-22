@@ -20,7 +20,7 @@ use std::io::{self, Read};
 const MAX_JSON_DEPTH: usize = 30;
 
 /// Input from Claude Code hooks.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct HookInput {
     /// The tool being invoked (e.g., "Read", "Write", "Bash")
     #[serde(default)]
@@ -31,6 +31,12 @@ pub struct HookInput {
     /// Session identifier
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The last assistant message, when provided by Claude Code for Stop/StopFailure events
+    #[serde(default)]
+    pub last_assistant_message: Option<String>,
+    /// StopFailure error kind such as rate_limit / billing_error / authentication_failed
+    #[serde(default)]
+    pub error: Option<String>,
     /// Tool output (for PostToolUse hooks)
     #[serde(default)]
     #[allow(dead_code)]

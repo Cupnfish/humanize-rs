@@ -1,4 +1,6 @@
 use super::*;
+use jsongrep::query::{DFAQueryEngine, QueryDFA};
+use regex::Regex;
 pub(super) struct PrReaction {
     user: String,
     content: String,
@@ -28,6 +30,36 @@ pub(super) struct PrPollOutcome {
     pub(super) comments: Vec<PrReviewEvent>,
     pub(super) timed_out_bots: HashSet<String>,
     pub(super) active_bots: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PrLookupContext {
+    pub(super) pr_number: u32,
+    pub(super) repo: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StopHookPromptConfig {
+    compact_large_prompts: bool,
+    max_inline_bytes: usize,
+}
+
+const STOP_HOOK_COMPACT_PROMPTS_ENV: &str = "HUMANIZE_STOP_HOOK_COMPACT_PROMPTS";
+const STOP_HOOK_PROMPT_MAX_INLINE_BYTES_ENV: &str = "HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES";
+const STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES: usize = 16 * 1024;
+const GH_API_MAX_RETRIES: usize = 3;
+const GH_API_RETRY_DELAY_SECS: u64 = 2;
+
+#[derive(Debug, Clone, Default)]
+struct GhApiValuesOutcome {
+    values: Vec<serde_json::Value>,
+    failed: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct PrCommentFetchResult {
+    pub(super) comments: Vec<PrComment>,
+    pub(super) api_failures: usize,
 }
 
 pub(crate) fn resolve_project_root() -> Result<PathBuf> {
@@ -77,14 +109,20 @@ pub(super) struct PrCommitInfo {
 pub(super) struct StartupCaseInfo {
     pub(super) case_num: u32,
     pub(super) comments: Vec<PrComment>,
+    pub(super) api_failures: usize,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct PrComment {
+    id: u64,
     author: String,
+    author_type: String,
     created_at: String,
     body: String,
     source: &'static str,
+    state: Option<String>,
+    path: Option<String>,
+    line: Option<u64>,
 }
 
 pub(super) fn ensure_command_exists(cmd: &str, message: &str) -> Result<()> {
@@ -121,101 +159,159 @@ pub(super) fn ensure_gh_auth(project_root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn gh_current_repo(project_root: &Path) -> Result<String> {
-    let output = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "owner,name",
-            "-q",
-            ".owner.login + \"/\" + .name",
-        ])
-        .current_dir(project_root)
-        .output()?;
-    if !output.status.success() {
-        bail!("Error: Failed to get current repository");
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn jsongrep_values_from_text(json_text: &str, query: &str) -> Result<Vec<serde_json::Value>> {
+    let json: serde_json_borrow::Value = serde_json::from_str(json_text)?;
+    let dfa = QueryDFA::from_query_str(query)
+        .map_err(|err| anyhow::anyhow!("Failed to compile jsongrep query `{query}`: {err}"))?;
+    DFAQueryEngine::find_with_dfa(&json, &dfa)
+        .into_iter()
+        .map(|pointer| {
+            serde_json::to_value(pointer.value).context("Failed to serialize jsongrep match")
+        })
+        .collect()
+}
+
+fn jsongrep_first_string_from_text(json_text: &str, query: &str) -> Result<Option<String>> {
+    Ok(jsongrep_values_from_text(json_text, query)?
+        .into_iter()
+        .find_map(|value| match value {
+            serde_json::Value::String(text) => Some(text),
+            serde_json::Value::Number(number) => Some(number.to_string()),
+            serde_json::Value::Bool(flag) => Some(flag.to_string()),
+            _ => None,
+        }))
+}
+
+fn jsongrep_first_u64_from_text(json_text: &str, query: &str) -> Result<Option<u64>> {
+    Ok(jsongrep_values_from_text(json_text, query)?
+        .into_iter()
+        .find_map(|value| value.as_u64()))
+}
+
+fn strip_between_delimiter(input: &str, delimiter: &str) -> String {
+    input
+        .split(delimiter)
+        .enumerate()
+        .filter_map(|(idx, part)| (idx % 2 == 0).then_some(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_non_mention_contexts(body: &str) -> String {
+    let fenced_backticks = strip_between_delimiter(body, "```");
+    let fenced = strip_between_delimiter(&fenced_backticks, "~~~");
+    let inline_code = Regex::new(r"`[^`]*`").expect("valid inline code regex");
+    let indented_code = Regex::new(r"(?m)^(?: {4}|\t)[^\n]*").expect("valid indented code regex");
+    let quoted_lines = Regex::new(r"(?m)^\s*>[^\n]*").expect("valid quote regex");
+
+    let cleaned = inline_code.replace_all(&fenced, " ");
+    let cleaned = indented_code.replace_all(&cleaned, " ");
+    quoted_lines.replace_all(&cleaned, " ").into_owned()
+}
+
+fn bot_mention_regex(bot: &str) -> Result<Regex> {
+    Regex::new(&format!(
+        r"(?i)(^|[^a-zA-Z0-9_-])@{}($|[^a-zA-Z0-9_-])",
+        regex::escape(bot)
+    ))
+    .map_err(|err| anyhow::anyhow!("Invalid bot mention regex for `{bot}`: {err}"))
+}
+
+fn contains_any_bot_mention(body: &str, bots: &[String]) -> bool {
+    bots.iter().any(|bot| {
+        bot_mention_regex(bot)
+            .map(|regex| regex.is_match(body))
+            .unwrap_or(false)
+    })
+}
+
+fn contains_all_bot_mentions(body: &str, bots: &[String]) -> bool {
+    let cleaned = strip_non_mention_contexts(body);
+    bots.iter().all(|bot| {
+        bot_mention_regex(bot)
+            .map(|regex| regex.is_match(&cleaned))
+            .unwrap_or(false)
+    })
+}
+
+fn is_bot_author(author_type: &str, author: &str) -> bool {
+    author_type == "Bot" || author.ends_with("[bot]")
+}
+
+fn repo_from_pr_url(url: &str) -> Option<String> {
+    Regex::new(r"^https?://[^/]+/([^/]+/[^/]+)/pull/")
+        .ok()?
+        .captures(url)
+        .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))
 }
 
 pub(super) fn gh_current_user(project_root: &Path) -> Result<String> {
-    let output = Command::new("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .current_dir(project_root)
-        .output()?;
+    let output = gh_output(project_root, &["api", "user"])?;
     if !output.status.success() {
         bail!("Error: Failed to get current GitHub user");
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    jsongrep_first_string_from_text(&stdout, "login")?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Error: Failed to parse current GitHub user"))
 }
 
-pub(super) fn gh_detect_pr_number(project_root: &Path) -> Result<u32> {
-    let output = Command::new("gh")
-        .args(["pr", "view", "--json", "number,url", "-q", ".number,.url"])
-        .current_dir(project_root)
-        .output()?;
+pub(super) fn gh_detect_pr_context(project_root: &Path) -> Result<PrLookupContext> {
+    let output = gh_output(project_root, &["pr", "view", "--json", "number,url"])?;
     if !output.status.success() {
         bail!("Error: No pull request found for the current branch");
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let mut lines = stdout.lines();
-    let number = lines
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let current_repo = gh_current_repo_json(project_root)?;
+    let pr_number = jsongrep_first_u64_from_text(&stdout, "number")?
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("Error: Invalid PR number from gh CLI"))?;
+    let repo = jsongrep_first_string_from_text(&stdout, "url")?
+        .and_then(|url| repo_from_pr_url(&url))
+        .unwrap_or(current_repo);
+    Ok(PrLookupContext { pr_number, repo })
+}
+
+pub(super) fn gh_detect_pr_context_for_branch(
+    project_root: &Path,
+    start_branch: &str,
+) -> Result<PrLookupContext> {
+    if let Ok(context) = gh_detect_pr_context(project_root) {
+        return Ok(context);
+    }
+
+    let current_repo = gh_current_repo_json(project_root)?;
+    let Some(parent_repo) = gh_parent_repo(project_root)? else {
+        bail!("Error: No pull request found for branch `{start_branch}`");
+    };
+    let fork_owner = current_repo
+        .split('/')
         .next()
-        .ok_or_else(|| anyhow::anyhow!("Error: Missing PR number"))?
-        .trim()
-        .parse::<u32>()
-        .context("Error: Invalid PR number from gh CLI")?;
-    Ok(number)
-}
-
-pub(super) fn gh_pr_state(project_root: &Path, pr_number: u32) -> Result<String> {
-    let output = Command::new("gh")
-        .args([
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Error: Failed to determine fork owner"))?;
+    let qualified_branch = format!("{}:{}", fork_owner, start_branch);
+    let output = gh_output(
+        project_root,
+        &[
             "pr",
             "view",
-            &pr_number.to_string(),
+            "--repo",
+            &parent_repo,
+            &qualified_branch,
             "--json",
-            "state",
-            "-q",
-            ".state",
-        ])
-        .current_dir(project_root)
-        .output()?;
+            "number",
+        ],
+    )?;
     if !output.status.success() {
-        bail!("Error: Failed to fetch PR state");
+        bail!("Error: No pull request found for branch `{start_branch}`");
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-pub(super) fn gh_pr_commit_info(project_root: &Path, pr_number: u32) -> Result<PrCommitInfo> {
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &pr_number.to_string(),
-            "--json",
-            "headRefOid,commits",
-            "--jq",
-            "{sha: .headRefOid, date: (.commits | sort_by(.committedDate) | last | .committedDate)}",
-        ])
-        .current_dir(project_root)
-        .output()?;
-    if !output.status.success() {
-        bail!("Error: Failed to fetch PR commit info");
-    }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    Ok(PrCommitInfo {
-        latest_commit_sha: value
-            .get("sha")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        latest_commit_at: value
-            .get("date")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pr_number = jsongrep_first_u64_from_text(&stdout, "number")?
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("Error: Invalid PR number from gh CLI"))?;
+    Ok(PrLookupContext {
+        pr_number,
+        repo: parent_repo,
     })
 }
 
@@ -246,82 +342,123 @@ pub(super) fn bot_author(bot: &str) -> &str {
     }
 }
 
-pub(super) fn gh_fetch_comments(
+pub(super) fn gh_fetch_comments_detailed(
     project_root: &Path,
     repo: &str,
     pr_number: u32,
-) -> Result<Vec<PrComment>> {
+) -> PrCommentFetchResult {
+    let mut api_failures = 0usize;
     let mut comments = Vec::new();
-    comments.extend(gh_fetch_comment_source(
+
+    let issue = gh_fetch_comment_source_tolerant(
         project_root,
         &format!("repos/{}/issues/{}/comments", repo, pr_number),
         "issue_comment",
-    )?);
-    comments.extend(gh_fetch_comment_source(
+        "issue comments",
+    );
+    comments.extend(issue.comments);
+    api_failures += issue.api_failures;
+
+    let review = gh_fetch_comment_source_tolerant(
         project_root,
         &format!("repos/{}/pulls/{}/comments", repo, pr_number),
         "review_comment",
-    )?);
-    comments.extend(gh_fetch_review_source(
+        "PR review comments",
+    );
+    comments.extend(review.comments);
+    api_failures += review.api_failures;
+
+    let reviews = gh_fetch_review_source_tolerant(
         project_root,
         &format!("repos/{}/pulls/{}/reviews", repo, pr_number),
-    )?);
-    comments.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(comments)
+        "PR reviews",
+    );
+    comments.extend(reviews.comments);
+    api_failures += reviews.api_failures;
+
+    let mut seen = HashSet::new();
+    comments.retain(|comment| seen.insert(comment.id));
+    comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    PrCommentFetchResult {
+        comments,
+        api_failures,
+    }
 }
 
-pub(super) fn gh_fetch_comment_source(
+fn gh_fetch_comment_source_tolerant(
     project_root: &Path,
     endpoint: &str,
     source: &'static str,
-) -> Result<Vec<PrComment>> {
-    let output = Command::new("gh")
-        .args(["api", endpoint])
-        .current_dir(project_root)
-        .output()?;
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-    let values: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
-    Ok(values
+    description: &str,
+) -> PrCommentFetchResult {
+    let outcome = gh_api_values_tolerant(project_root, endpoint, description);
+    let comments = outcome
+        .values
         .into_iter()
-        .map(|value| PrComment {
-            author: value
+        .filter_map(|value| {
+            let id = value.get("id").and_then(|v| v.as_u64())?;
+            let author = value
                 .get("user")
                 .and_then(|v| v.get("login"))
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
-                .to_string(),
-            created_at: value
-                .get("created_at")
+                .to_string();
+            let author_type = value
+                .get("user")
+                .and_then(|v| v.get("type"))
                 .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            body: value
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            source,
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    if author.ends_with("[bot]") {
+                        "Bot".to_string()
+                    } else {
+                        "User".to_string()
+                    }
+                });
+            Some(PrComment {
+                id,
+                author,
+                author_type,
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                body: value
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                source,
+                state: None,
+                path: value
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                line: value
+                    .get("line")
+                    .or_else(|| value.get("original_line"))
+                    .and_then(|v| v.as_u64()),
+            })
         })
-        .collect())
+        .collect();
+    PrCommentFetchResult {
+        comments,
+        api_failures: usize::from(outcome.failed),
+    }
 }
 
-pub(super) fn gh_fetch_review_source(
+fn gh_fetch_review_source_tolerant(
     project_root: &Path,
     endpoint: &str,
-) -> Result<Vec<PrComment>> {
-    let output = Command::new("gh")
-        .args(["api", endpoint])
-        .current_dir(project_root)
-        .output()?;
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-    let values: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
-    Ok(values
+    description: &str,
+) -> PrCommentFetchResult {
+    let outcome = gh_api_values_tolerant(project_root, endpoint, description);
+    let comments = outcome
+        .values
         .into_iter()
-        .map(|value| {
+        .filter_map(|value| {
+            let id = value.get("id").and_then(|v| v.as_u64())?;
             let state = value
                 .get("state")
                 .and_then(|v| v.as_str())
@@ -330,27 +467,54 @@ pub(super) fn gh_fetch_review_source(
                 .get("body")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            PrComment {
+            let author = value
+                .get("user")
+                .and_then(|v| v.get("login"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let author_type = value
+                .get("user")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    if author.ends_with("[bot]") {
+                        "Bot".to_string()
+                    } else {
+                        "User".to_string()
+                    }
+                });
+            Some(PrComment {
+                id,
                 author: value
                     .get("user")
                     .and_then(|v| v.get("login"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                author_type,
                 created_at: value
                     .get("submitted_at")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
                 body: if body.is_empty() {
-                    state.to_string()
+                    format!("[Review state: {}]", state)
                 } else {
-                    format!("{} ({})", body, state)
+                    body.to_string()
                 },
                 source: "pr_review",
-            }
+                state: Some(state.to_string()),
+                path: None,
+                line: None,
+            })
         })
-        .collect())
+        .collect();
+    PrCommentFetchResult {
+        comments,
+        api_failures: usize::from(outcome.failed),
+    }
 }
 
 pub(super) fn gh_startup_case(
@@ -360,7 +524,21 @@ pub(super) fn gh_startup_case(
     bots: &[String],
     latest_commit_at: &str,
 ) -> Result<StartupCaseInfo> {
-    let comments = gh_fetch_comments(project_root, repo, pr_number)?;
+    let fetch = gh_fetch_comments_detailed(project_root, repo, pr_number);
+    let comments = fetch.comments;
+    let case_num = compute_startup_case_from_comments(&comments, bots, latest_commit_at);
+    Ok(StartupCaseInfo {
+        case_num,
+        comments,
+        api_failures: fetch.api_failures,
+    })
+}
+
+pub(super) fn compute_startup_case_from_comments(
+    comments: &[PrComment],
+    bots: &[String],
+    latest_commit_at: &str,
+) -> u32 {
     let mut commented = Vec::new();
     let mut missing = Vec::new();
     let mut stale = Vec::new();
@@ -395,20 +573,123 @@ pub(super) fn gh_startup_case(
         5
     };
 
-    Ok(StartupCaseInfo { case_num, comments })
+    case_num
 }
 
-pub(super) fn format_initial_pr_comments(comments: &[PrComment]) -> String {
+fn render_pr_comment_block(comment: &PrComment, heading: &str) -> String {
+    let mut out = String::new();
+    out.push_str(heading);
+    out.push_str("\n\n");
+    out.push_str(&format!(
+        "- **Type**: {}\n",
+        comment.source.replace('_', " ")
+    ));
+    out.push_str(&format!("- **Time**: {}\n", comment.created_at));
+    if let Some(path) = &comment.path {
+        if let Some(line) = comment.line {
+            out.push_str(&format!("- **File**: `{path}` (line {line})\n"));
+        } else {
+            out.push_str(&format!("- **File**: `{path}`\n"));
+        }
+    }
+    if let Some(state) = &comment.state {
+        out.push_str(&format!("- **Status**: {state}\n"));
+    }
+    out.push('\n');
+    out.push_str(&comment.body);
+    out.push_str("\n\n---\n");
+    out
+}
+
+pub(super) fn format_initial_pr_comments(
+    pr_number: u32,
+    repo: &str,
+    active_bots: &[String],
+    comments: &[PrComment],
+    api_failures: usize,
+) -> String {
+    let mut out = format!(
+        "# PR Comments for #{}\n\nFetched at: {}\nRepository: {}\n\n---\n\n",
+        pr_number,
+        now_utc_string(),
+        repo
+    );
+
     if comments.is_empty() {
-        return "# PR Comments\n\n*No comments found.*\n".to_string();
+        out.push_str("*No comments found.*\n\n---\n\nThis PR has no review comments yet from the monitored bots.\n");
+        if api_failures > 0 {
+            out.push_str("\n**Warning:** Some API calls failed. Comments may be incomplete.\n");
+        }
+        out.push_str("\n---\n\n*End of comments*\n");
+        return out;
     }
-    let mut out = String::from("# PR Comments\n\n");
-    for comment in comments {
-        out.push_str(&format!(
-            "## {} ({})\n\n- Author: {}\n- Time: {}\n\n{}\n\n",
-            comment.source, comment.author, comment.author, comment.created_at, comment.body
-        ));
+
+    let mut sorted_comments = comments
+        .iter()
+        .filter(|comment| !comment.created_at.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    sorted_comments.sort_by(|a, b| {
+        let a_bot = is_bot_author(&a.author_type, &a.author);
+        let b_bot = is_bot_author(&b.author_type, &b.author);
+        a_bot
+            .cmp(&b_bot)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+
+    out.push_str("## Human Comments\n\n");
+    let human_comments = sorted_comments
+        .iter()
+        .filter(|comment| !is_bot_author(&comment.author_type, &comment.author))
+        .collect::<Vec<_>>();
+    if human_comments.is_empty() {
+        out.push_str("*No human comments.*\n\n");
+    } else {
+        for comment in human_comments {
+            out.push_str(&render_pr_comment_block(
+                comment,
+                &format!("### Comment from {}", comment.author),
+            ));
+        }
+        out.push('\n');
     }
+
+    if !active_bots.is_empty() {
+        out.push_str("## Bot Comments (Grouped by Bot)\n\n");
+        for bot in active_bots {
+            let author = bot_author(bot);
+            out.push_str(&format!("### Comments from {}\n\n", author));
+            let bot_comments = sorted_comments
+                .iter()
+                .filter(|comment| comment.author == author)
+                .collect::<Vec<_>>();
+            if bot_comments.is_empty() {
+                out.push_str("*No comments from this bot.*\n\n");
+                continue;
+            }
+            for comment in bot_comments {
+                out.push_str(&render_pr_comment_block(comment, "#### Comment"));
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push_str("## Bot Comments\n\n");
+        for comment in sorted_comments
+            .iter()
+            .filter(|comment| is_bot_author(&comment.author_type, &comment.author))
+        {
+            out.push_str(&render_pr_comment_block(
+                comment,
+                &format!("### Comment from {}", comment.author),
+            ));
+        }
+    }
+
+    if api_failures > 0 {
+        out.push_str("\n**Warning:** Some API calls failed. Comments may be incomplete.\n");
+    }
+
+    out.push_str("\n---\n\n*End of comments*\n");
     out
 }
 
@@ -418,17 +699,11 @@ pub(super) fn gh_find_latest_user_comment(
     pr_number: u32,
     user: &str,
 ) -> Result<Option<(u64, String)>> {
-    let output = Command::new("gh")
-        .args([
-            "api",
-            &format!("repos/{}/issues/{}/comments", repo, pr_number),
-        ])
-        .current_dir(project_root)
-        .output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let values: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let values = gh_api_values(
+        project_root,
+        &format!("repos/{}/issues/{}/comments", repo, pr_number),
+    )
+    .unwrap_or_default();
     let latest = values
         .into_iter()
         .filter(|value| {
@@ -731,6 +1006,36 @@ pub(super) fn build_impl_review_prompt(
     }
 }
 
+fn stop_hook_prompt_config() -> StopHookPromptConfig {
+    StopHookPromptConfig {
+        compact_large_prompts: std::env::var(STOP_HOOK_COMPACT_PROMPTS_ENV)
+            .map(|value| {
+                let normalized = value.trim().to_ascii_lowercase();
+                !matches!(normalized.as_str(), "0" | "false" | "off")
+            })
+            .unwrap_or(true),
+        max_inline_bytes: std::env::var(STOP_HOOK_PROMPT_MAX_INLINE_BYTES_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES),
+    }
+}
+
+fn maybe_compact_stop_hook_prompt<F>(inline_prompt: String, compact_builder: F) -> String
+where
+    F: FnOnce() -> String,
+{
+    let config = stop_hook_prompt_config();
+    if !config.compact_large_prompts || inline_prompt.len() <= config.max_inline_bytes {
+        return inline_prompt;
+    }
+
+    // Keep stop-hook prompt bodies below the risky size window until Claude Code fixes
+    // the large-stdout Stop-hook regression: https://github.com/anthropics/claude-code/issues/37135
+    compact_builder()
+}
+
 pub(super) fn build_next_round_prompt(
     loop_dir: &Path,
     state: &humanize_core::state::State,
@@ -739,19 +1044,33 @@ pub(super) fn build_next_round_prompt(
     let next_round = state.current_round + 1;
     let next_summary_file = loop_dir.join(format!("round-{}-summary.md", next_round));
     let full_alignment = is_full_alignment_round(state.current_round, state.full_review_round);
+    let goal_tracker_file = loop_dir.join("goal-tracker.md");
+    let review_result_file =
+        loop_dir.join(format!("round-{}-review-result.md", state.current_round));
 
-    let mut prompt = render_template_or_fallback(
+    let inline_prompt = render_template_or_fallback(
         "claude/next-round-prompt.md",
         "Your work is not finished. Read and execute the below with ultrathink.\n\n## Original Implementation Plan\n\n@{{PLAN_FILE}}\n\nBelow is Codex's review result:\n{{REVIEW_CONTENT}}\n\n## Goal Tracker Reference\n@{{GOAL_TRACKER_FILE}}\n",
         &[
             ("PLAN_FILE", state.plan_file.clone()),
             ("REVIEW_CONTENT", review_content.to_string()),
-            (
-                "GOAL_TRACKER_FILE",
-                loop_dir.join("goal-tracker.md").display().to_string(),
-            ),
+            ("GOAL_TRACKER_FILE", goal_tracker_file.display().to_string()),
         ],
     );
+    let mut prompt = maybe_compact_stop_hook_prompt(inline_prompt, || {
+        render_template_or_fallback(
+            "claude/next-round-prompt-compact.md",
+            "Your work is not finished. Read and execute the below with ultrathink.\n\n## Original Implementation Plan\n\n@{{PLAN_FILE}}\n\n## Codex Review Result\n\nThe full Codex review is in:\n@{{REVIEW_RESULT_FILE}}\n\nRead that file carefully before making changes.\n\n## Goal Tracker Reference\n@{{GOAL_TRACKER_FILE}}\n",
+            &[
+                ("PLAN_FILE", state.plan_file.clone()),
+                (
+                    "REVIEW_RESULT_FILE",
+                    review_result_file.display().to_string(),
+                ),
+                ("GOAL_TRACKER_FILE", goal_tracker_file.display().to_string()),
+            ],
+        )
+    });
 
     if state.ask_codex_question && detect_open_question(review_content) {
         let notice = render_template_or_fallback(
@@ -800,15 +1119,32 @@ pub(super) fn build_next_round_prompt(
     prompt
 }
 
-pub(super) fn build_review_phase_fix_prompt(review_content: &str, summary_file: &Path) -> String {
-    render_template_or_fallback(
+pub(super) fn build_review_phase_fix_prompt(
+    review_content: &str,
+    review_result_file: &Path,
+    summary_file: &Path,
+) -> String {
+    let inline_prompt = render_template_or_fallback(
         "claude/review-phase-prompt.md",
         "# Code Review Findings\n\n{{REVIEW_CONTENT}}\n\nWrite your summary to: `{{SUMMARY_FILE}}`",
         &[
             ("REVIEW_CONTENT", review_content.to_string()),
             ("SUMMARY_FILE", summary_file.display().to_string()),
         ],
-    )
+    );
+    maybe_compact_stop_hook_prompt(inline_prompt, || {
+        render_template_or_fallback(
+            "claude/review-phase-prompt-compact.md",
+            "# Code Review Findings\n\nThe full Codex review findings are in:\n@{{REVIEW_RESULT_FILE}}\n\nRead that file carefully and address every issue before continuing.\n\nWrite your summary to: `{{SUMMARY_FILE}}`",
+            &[
+                (
+                    "REVIEW_RESULT_FILE",
+                    review_result_file.display().to_string(),
+                ),
+                ("SUMMARY_FILE", summary_file.display().to_string()),
+            ],
+        )
+    })
 }
 
 pub(super) fn build_review_phase_audit_prompt(review_round: u32, base_branch: &str) -> String {
@@ -867,16 +1203,61 @@ pub(super) fn gh_output(project_root: &Path, args: &[&str]) -> Result<std::proce
         .output()?)
 }
 
-pub(super) fn gh_api_values(project_root: &Path, endpoint: &str) -> Result<Vec<serde_json::Value>> {
-    let output = gh_output(project_root, &["api", endpoint, "--paginate"])?;
-    if !output.status.success() {
-        bail!(
-            "GitHub API failed for {}: {}",
-            endpoint,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+fn gh_api_values_with_retry(
+    project_root: &Path,
+    endpoint: &str,
+    description: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let mut last_error: Option<String> = None;
+
+    for attempt in 1..=GH_API_MAX_RETRIES {
+        let output = gh_output(project_root, &["api", endpoint, "--paginate"])?;
+        if output.status.success() {
+            return parse_json_value_stream(&output.stdout);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        last_error = Some(stderr.clone());
+        if attempt < GH_API_MAX_RETRIES {
+            eprintln!(
+                "Warning: Failed to fetch {description} (attempt {attempt}/{GH_API_MAX_RETRIES}), retrying in {GH_API_RETRY_DELAY_SECS}s..."
+            );
+            sleep(Duration::from_secs(GH_API_RETRY_DELAY_SECS));
+        }
     }
-    parse_json_value_stream(&output.stdout)
+
+    bail!(
+        "GitHub API failed for {} after {} attempts: {}",
+        endpoint,
+        GH_API_MAX_RETRIES,
+        last_error.unwrap_or_default()
+    );
+}
+
+fn gh_api_values_tolerant(
+    project_root: &Path,
+    endpoint: &str,
+    description: &str,
+) -> GhApiValuesOutcome {
+    match gh_api_values_with_retry(project_root, endpoint, description) {
+        Ok(values) => GhApiValuesOutcome {
+            values,
+            failed: false,
+        },
+        Err(err) => {
+            eprintln!(
+                "WARNING: Failed to fetch {description} after {GH_API_MAX_RETRIES} attempts: {err}"
+            );
+            GhApiValuesOutcome {
+                values: Vec::new(),
+                failed: true,
+            }
+        }
+    }
+}
+
+pub(super) fn gh_api_values(project_root: &Path, endpoint: &str) -> Result<Vec<serde_json::Value>> {
+    gh_api_values_with_retry(project_root, endpoint, endpoint)
 }
 
 pub(super) fn gh_current_repo_json(project_root: &Path) -> Result<String> {
@@ -884,16 +1265,9 @@ pub(super) fn gh_current_repo_json(project_root: &Path) -> Result<String> {
     if !output.status.success() {
         bail!("Error: Failed to get current repository");
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let owner = value
-        .get("owner")
-        .and_then(|v| v.get("login"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let name = value
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let owner = jsongrep_first_string_from_text(&stdout, "owner.login")?.unwrap_or_default();
+    let name = jsongrep_first_string_from_text(&stdout, "name")?.unwrap_or_default();
     if owner.is_empty() || name.is_empty() {
         bail!("Error: Failed to parse current repository");
     }
@@ -905,17 +1279,9 @@ pub(super) fn gh_parent_repo(project_root: &Path) -> Result<Option<String>> {
     if !output.status.success() {
         return Ok(None);
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let parent = value.get("parent").unwrap_or(&serde_json::Value::Null);
-    let owner = parent
-        .get("owner")
-        .and_then(|v| v.get("login"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let name = parent
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let owner = jsongrep_first_string_from_text(&stdout, "parent.owner.login")?.unwrap_or_default();
+    let name = jsongrep_first_string_from_text(&stdout, "parent.name")?.unwrap_or_default();
     if owner.is_empty() || name.is_empty() {
         Ok(None)
     } else {
@@ -975,12 +1341,10 @@ pub(super) fn gh_pr_state_in_repo(
     if !output.status.success() {
         bail!("Error: Failed to fetch PR state");
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    Ok(value
-        .get("state")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    jsongrep_first_string_from_text(&stdout, "state")?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Error: Failed to parse PR state"))
 }
 
 pub(super) fn gh_pr_commit_info_in_repo(
@@ -1003,24 +1367,16 @@ pub(super) fn gh_pr_commit_info_in_repo(
     if !output.status.success() {
         bail!("Error: Failed to fetch PR commit info");
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let latest_commit_at = value
-        .get("commits")
-        .and_then(|v| v.as_array())
-        .and_then(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("committedDate").and_then(|v| v.as_str()))
-                .max()
-        })
-        .unwrap_or_default()
-        .to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let latest_commit_sha =
+        jsongrep_first_string_from_text(&stdout, "headRefOid")?.unwrap_or_default();
+    let latest_commit_at = jsongrep_values_from_text(&stdout, "commits.[*].committedDate")?
+        .into_iter()
+        .filter_map(|value| value.as_str().map(ToString::to_string))
+        .max()
+        .unwrap_or_default();
     Ok(PrCommitInfo {
-        latest_commit_sha: value
-            .get("headRefOid")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
+        latest_commit_sha,
         latest_commit_at,
     })
 }
@@ -1071,6 +1427,63 @@ pub(super) fn sanitize_bot_list(bots: &[String]) -> Vec<String> {
         .collect()
 }
 
+pub(super) fn gh_find_existing_trigger_comment(
+    project_root: &Path,
+    repo: &str,
+    pr_number: u32,
+    current_user: &str,
+    active_bots: &[String],
+    latest_commit_at: &str,
+) -> Result<Option<PrTriggerComment>> {
+    let values = gh_api_values(
+        project_root,
+        &format!("repos/{}/issues/{}/comments", repo, pr_number),
+    )?;
+    let mut latest: Option<PrTriggerComment> = None;
+
+    for value in values {
+        let author = value
+            .get("user")
+            .and_then(|v| v.get("login"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if author != current_user {
+            continue;
+        }
+
+        let created_at = value
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !latest_commit_at.is_empty() && created_at.as_str() <= latest_commit_at {
+            continue;
+        }
+
+        let body = value
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if !contains_all_bot_mentions(body, active_bots) {
+            continue;
+        }
+
+        let Some(id) = value.get("id").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let candidate = PrTriggerComment { id, created_at };
+        if latest
+            .as_ref()
+            .map(|current| candidate.created_at > current.created_at)
+            .unwrap_or(true)
+        {
+            latest = Some(candidate);
+        }
+    }
+
+    Ok(latest)
+}
+
 pub(super) fn gh_detect_trigger_comment(
     project_root: &Path,
     repo: &str,
@@ -1097,10 +1510,7 @@ pub(super) fn gh_detect_trigger_comment(
             .get("body")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        if !configured_bots.iter().any(|bot| {
-            body.to_lowercase()
-                .contains(&format!("@{}", bot.to_lowercase()))
-        }) {
+        if !contains_any_bot_mention(body, configured_bots) {
             continue;
         }
         let created_at = value
@@ -1176,16 +1586,22 @@ pub(super) fn gh_find_codex_thumbsup(
     pr_number: u32,
     after_timestamp: Option<&str>,
 ) -> Result<Option<PrReaction>> {
-    let mut matches = gh_issue_reactions(project_root, repo, pr_number)?
-        .into_iter()
-        .filter(|reaction| {
-            reaction.user == "chatgpt-codex-connector[bot]"
-                && reaction.content == "+1"
-                && after_timestamp
-                    .map(|after| after.is_empty() || reaction.created_at.as_str() >= after)
-                    .unwrap_or(true)
-        })
-        .collect::<Vec<_>>();
+    let mut matches = match gh_issue_reactions(project_root, repo, pr_number) {
+        Ok(reactions) => reactions,
+        Err(err) => {
+            eprintln!("Warning: Failed to fetch Codex reactions: {err}");
+            return Ok(None);
+        }
+    }
+    .into_iter()
+    .filter(|reaction| {
+        reaction.user == "chatgpt-codex-connector[bot]"
+            && reaction.content == "+1"
+            && after_timestamp
+                .map(|after| after.is_empty() || reaction.created_at.as_str() >= after)
+                .unwrap_or(true)
+    })
+    .collect::<Vec<_>>();
     matches.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     Ok(matches.pop())
 }
@@ -1218,21 +1634,24 @@ pub(super) fn gh_fetch_review_events(
     repo: &str,
     pr_number: u32,
 ) -> Result<Vec<PrReviewEvent>> {
-    let issue_values = gh_api_values(
+    let issue_values = gh_api_values_tolerant(
         project_root,
         &format!("repos/{}/issues/{}/comments", repo, pr_number),
+        "issue comments",
     )
-    .unwrap_or_default();
-    let review_comment_values = gh_api_values(
+    .values;
+    let review_comment_values = gh_api_values_tolerant(
         project_root,
         &format!("repos/{}/pulls/{}/comments", repo, pr_number),
+        "PR review comments",
     )
-    .unwrap_or_default();
-    let review_values = gh_api_values(
+    .values;
+    let review_values = gh_api_values_tolerant(
         project_root,
         &format!("repos/{}/pulls/{}/reviews", repo, pr_number),
+        "PR reviews",
     )
-    .unwrap_or_default();
+    .values;
 
     let mut events = Vec::new();
 
@@ -1579,10 +1998,11 @@ pub(super) fn build_pr_feedback_markdown(
     pr_number: u32,
     loop_dir: &Path,
     active_bots: &[String],
+    check_file: &Path,
     check_content: &str,
 ) -> String {
     let bot_mentions = build_bot_mention_string(active_bots);
-    format!(
+    let inline_prompt = format!(
         "# PR Loop Feedback (Round {})\n\n## Bot Review Analysis\n\n{}\n\n---\n\n## Your Task\n\nAddress the issues identified above:\n\n1. Read and understand each issue\n2. Make the necessary code changes\n3. Commit and push your changes\n4. Comment on the PR to trigger re-review:\n   ```bash\ngh pr comment {} --body \"{} please review the latest changes\"\n   ```\n5. Write your resolution summary to: {}\n\n---\n\n**Remaining active bots:** {}\n**Round:** {} of {}\n",
         next_round,
         check_content.trim(),
@@ -1594,7 +2014,22 @@ pub(super) fn build_pr_feedback_markdown(
         active_bots.join(", "),
         next_round,
         max_iterations
-    )
+    );
+    maybe_compact_stop_hook_prompt(inline_prompt, || {
+        format!(
+            "# PR Loop Feedback (Round {})\n\n## Bot Review Analysis\n\nThe full Codex bot-review analysis is in:\n@{}\n\nRead that file carefully and address every remaining issue before continuing.\n\n---\n\n## Your Task\n\n1. Read and understand each issue\n2. Make the necessary code changes\n3. Commit and push your changes\n4. Comment on the PR to trigger re-review:\n   ```bash\ngh pr comment {} --body \"{} please review the latest changes\"\n   ```\n5. Write your resolution summary to: {}\n\n---\n\n**Remaining active bots:** {}\n**Round:** {} of {}\n",
+            next_round,
+            check_file.display(),
+            pr_number,
+            bot_mentions,
+            loop_dir
+                .join(format!("round-{}-pr-resolve.md", next_round))
+                .display(),
+            active_bots.join(", "),
+            next_round,
+            max_iterations
+        )
+    })
 }
 
 pub(super) fn current_unix_epoch() -> i64 {
@@ -1802,4 +2237,40 @@ pub(super) fn run_pr_codex_review(
         .map_err(|err| anyhow::anyhow!("Codex failed to validate bot reviews: {}", err))?;
     fs::write(check_file, &result.stdout)?;
     Ok(result.stdout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contains_all_bot_mentions_ignores_code_and_quotes() {
+        let body = r#"
+```text
+@claude
+@codex
+```
+> @claude
+Real request: @claude please review
+Inline `@codex` should not count
+Also real: @codex please review
+"#;
+        assert!(contains_all_bot_mentions(
+            body,
+            &["claude".to_string(), "codex".to_string()]
+        ));
+    }
+
+    #[test]
+    fn contains_all_bot_mentions_rejects_partial_or_suffix_matches() {
+        let body = "@claude-dev please review support@codex.io";
+        assert!(!contains_all_bot_mentions(
+            body,
+            &["claude".to_string(), "codex".to_string()]
+        ));
+        assert!(!contains_any_bot_mention(
+            body,
+            &["claude".to_string(), "codex".to_string()]
+        ));
+    }
 }

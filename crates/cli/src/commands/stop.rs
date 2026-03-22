@@ -1,6 +1,7 @@
 use super::pr::*;
 use super::*;
 use humanize_core::state::PlanMode;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Default, Deserialize)]
 struct StopHookInput {
@@ -8,6 +9,10 @@ struct StopHookInput {
     session_id: Option<String>,
     #[serde(default)]
     transcript_path: Option<String>,
+    #[serde(default)]
+    stop_hook_active: bool,
+    #[serde(default)]
+    last_assistant_message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -18,11 +23,116 @@ struct StopHookOutput {
     system_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StopFailureMarker {
+    session_id: String,
+    error: String,
+    recorded_at_epoch: i64,
+    #[serde(default)]
+    last_assistant_message: Option<String>,
+}
+
+const STOP_FAILURE_MARKER_MAX_AGE_SECS: i64 = 15 * 60;
+
 pub(super) fn handle_stop(cmd: StopCommands) -> Result<()> {
     match cmd {
         StopCommands::Rlcr => handle_stop_rlcr(),
         StopCommands::Pr => handle_stop_pr(),
     }
+}
+
+pub(super) fn handle_stop_failure_hook(input: &HookInput) -> Result<()> {
+    let Some(session_id) = input
+        .session_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(error) = input.error.as_deref() else {
+        return Ok(());
+    };
+    if !is_stop_failure_bypass_error(error) {
+        return Ok(());
+    }
+
+    let project_root = resolve_project_root()?;
+    let marker = StopFailureMarker {
+        session_id: session_id.to_string(),
+        error: error.to_string(),
+        recorded_at_epoch: current_unix_epoch(),
+        last_assistant_message: input.last_assistant_message.clone(),
+    };
+
+    let path = stop_failure_marker_path(&project_root, session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string(&marker)?)?;
+    Ok(())
+}
+
+fn is_stop_failure_bypass_error(error: &str) -> bool {
+    matches!(
+        error.trim(),
+        "rate_limit" | "billing_error" | "authentication_failed"
+    )
+}
+
+fn stop_failure_marker_path(project_root: &Path, session_id: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(session_id.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    project_root
+        .join(".humanize/stop-failure-markers")
+        .join(format!("{digest}.json"))
+}
+
+fn consume_stop_failure_bypass(project_root: &Path, input: &StopHookInput) -> bool {
+    if !input.stop_hook_active {
+        return false;
+    }
+
+    let Some(session_id) = input
+        .session_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    let path = stop_failure_marker_path(project_root, session_id);
+    let raw = match fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let marker: StopFailureMarker = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            let _ = fs::remove_file(&path);
+            return false;
+        }
+    };
+
+    let age = current_unix_epoch().saturating_sub(marker.recorded_at_epoch);
+    let message_matches = match (
+        marker.last_assistant_message.as_deref(),
+        input.last_assistant_message.as_deref(),
+    ) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => true,
+    };
+
+    if marker.session_id != session_id || age > STOP_FAILURE_MARKER_MAX_AGE_SECS || !message_matches
+    {
+        if age > STOP_FAILURE_MARKER_MAX_AGE_SECS || !message_matches {
+            let _ = fs::remove_file(&path);
+        }
+        return false;
+    }
+
+    let _ = fs::remove_file(&path);
+    true
 }
 
 fn handle_stop_rlcr() -> Result<()> {
@@ -43,6 +153,10 @@ fn handle_stop_rlcr() -> Result<()> {
         None => return Ok(()),
     };
 
+    if consume_stop_failure_bypass(&project_root, &input) {
+        return Ok(());
+    }
+
     let is_finalize_phase = state_file.ends_with("finalize-state.md");
     let state_content = fs::read_to_string(&state_file)
         .context("Malformed state file, blocking operation for safety")?;
@@ -52,7 +166,10 @@ fn handle_stop_rlcr() -> Result<()> {
     if state.base_branch.is_empty() {
         let reason = "State file missing base_branch value. This indicates the loop was started with an older version of humanize.\n\n\
                      Options:\n1. Cancel the loop: /humanize:cancel-rlcr-loop\n2. Update humanize and restart the loop";
-        return emit_stop_block(reason, Some("Loop: Blocked - state schema outdated (missing base_branch)"));
+        return emit_stop_block(
+            reason,
+            Some("Loop: Blocked - state schema outdated (missing base_branch)"),
+        );
     }
 
     if let Some(reason) = validate_plan_state_schema(&state_content) {
@@ -295,7 +412,9 @@ fn run_review_phase(
         state.save(state_file)?;
         let next_prompt_file = loop_dir.join(format!("round-{}-prompt.md", review_round));
         let next_summary_file = loop_dir.join(format!("round-{}-summary.md", review_round));
-        let review_fix_prompt = build_review_phase_fix_prompt(&review_issues, &next_summary_file);
+        let review_result_file = loop_dir.join(format!("round-{}-review-result.md", review_round));
+        let review_fix_prompt =
+            build_review_phase_fix_prompt(&review_issues, &review_result_file, &next_summary_file);
         fs::write(&next_prompt_file, &review_fix_prompt)?;
         return emit_stop_block(
             &review_fix_prompt,
@@ -384,7 +503,10 @@ fn stop_hook_plan_integrity_check(
         &state.plan_source_path
     };
 
-    if matches!(state.plan_mode, PlanMode::SourceClean | PlanMode::SourceImmutable) {
+    if matches!(
+        state.plan_mode,
+        PlanMode::SourceClean | PlanMode::SourceImmutable
+    ) {
         let full_plan = project_root.join(source_path);
         if !full_plan.exists() {
             return Some(format!(
@@ -415,7 +537,9 @@ fn stop_hook_plan_integrity_check(
             }
         }
 
-        if matches!(state.plan_mode, PlanMode::SourceImmutable) && !state.plan_source_sha256.is_empty() {
+        if matches!(state.plan_mode, PlanMode::SourceImmutable)
+            && !state.plan_source_sha256.is_empty()
+        {
             let current_content = fs::read(&full_plan).ok()?;
             let current_hash = {
                 use sha2::{Digest, Sha256};
@@ -532,6 +656,19 @@ fn emit_stop_block(reason: &str, system_message: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn best_effort_startup_case_value(
+    result: Result<StartupCaseInfo>,
+    previous: Option<&str>,
+) -> String {
+    match result {
+        Ok(startup) => startup.case_num.to_string(),
+        Err(err) => {
+            eprintln!("Warning: Failed to re-evaluate startup case: {err}");
+            previous.unwrap_or("1").to_string()
+        }
+    }
+}
+
 fn rlcr_cache_dir(project_root: &Path, loop_dir: &Path) -> Result<PathBuf> {
     let base = std::env::var("XDG_CACHE_HOME")
         .ok()
@@ -561,6 +698,10 @@ fn handle_stop_pr() -> Result<()> {
     };
     let state_file = loop_dir.join("state.md");
     if !state_file.exists() {
+        return Ok(());
+    }
+
+    if consume_stop_failure_bypass(&project_root, &_input) {
         return Ok(());
     }
 
@@ -598,7 +739,7 @@ fn handle_stop_pr() -> Result<()> {
     state.active_bots = Some(active_bots.clone());
 
     let pr_repo = gh_resolve_pr_repo(&project_root, pr_number)?;
-    let pr_state = gh_pr_state_in_repo(&project_root, &pr_repo, pr_number)?;
+    let pr_state = gh_pr_state_in_repo(&project_root, &pr_repo, pr_number).unwrap_or_default();
     if pr_state == "MERGED" {
         humanize_core::state::State::rename_to_terminal(&state_file, "merged")?;
         return Ok(());
@@ -711,7 +852,11 @@ fn handle_stop_pr() -> Result<()> {
     }
 
     let current_user = gh_current_user(&project_root).ok();
-    let commit_info = gh_pr_commit_info_in_repo(&project_root, &pr_repo, pr_number)?;
+    let commit_info =
+        gh_pr_commit_info_in_repo(&project_root, &pr_repo, pr_number).unwrap_or(PrCommitInfo {
+            latest_commit_sha: state.latest_commit_sha.clone().unwrap_or_default(),
+            latest_commit_at: state.latest_commit_at.clone().unwrap_or_default(),
+        });
     let mut new_commits_detected = false;
     if !commit_info.latest_commit_at.is_empty()
         && state
@@ -728,24 +873,29 @@ fn handle_stop_pr() -> Result<()> {
     }
 
     if let Some(user) = current_user.as_deref() {
-        let trigger = gh_detect_trigger_comment(
+        match gh_detect_trigger_comment(
             &project_root,
             &pr_repo,
             pr_number,
             user,
             &configured_bots,
             state.latest_commit_at.as_deref(),
-        )?;
-        if let Some(trigger) = trigger {
-            let should_update = state
-                .last_trigger_at
-                .as_deref()
-                .map(|current| trigger.created_at.as_str() > current)
-                .unwrap_or(true);
-            if should_update {
-                state.last_trigger_at = Some(trigger.created_at);
-                state.trigger_comment_id = Some(trigger.id.to_string());
-                state.save(&state_file)?;
+        ) {
+            Ok(Some(trigger)) => {
+                let should_update = state
+                    .last_trigger_at
+                    .as_deref()
+                    .map(|current| trigger.created_at.as_str() > current)
+                    .unwrap_or(true);
+                if should_update {
+                    state.last_trigger_at = Some(trigger.created_at);
+                    state.trigger_comment_id = Some(trigger.id.to_string());
+                    state.save(&state_file)?;
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("Warning: Failed to detect trigger comment: {err}");
             }
         }
     }
@@ -979,19 +1129,22 @@ fn handle_stop_pr() -> Result<()> {
                 .clone()
                 .unwrap_or_else(now_utc_string),
         });
-    let startup = gh_startup_case(
-        &project_root,
-        &pr_repo,
-        pr_number,
-        &configured_bots,
-        &refreshed_commit_info.latest_commit_at,
-    )?;
+    let startup_case_value = best_effort_startup_case_value(
+        gh_startup_case(
+            &project_root,
+            &pr_repo,
+            pr_number,
+            &configured_bots,
+            &refreshed_commit_info.latest_commit_at,
+        ),
+        state.startup_case.as_deref(),
+    );
 
     state.current_round = next_round;
     state.active_bots = Some(new_active_bots.clone());
     state.latest_commit_sha = Some(current_head);
     state.latest_commit_at = Some(refreshed_commit_info.latest_commit_at);
-    state.startup_case = Some(startup.case_num.to_string());
+    state.startup_case = Some(startup_case_value);
     state.last_trigger_at = None;
     state.save(&state_file)?;
 
@@ -1007,6 +1160,7 @@ fn handle_stop_pr() -> Result<()> {
         pr_number,
         &loop_dir,
         &new_active_bots,
+        &check_file,
         &check_content,
     );
     fs::write(&feedback_file, &feedback)?;
@@ -1067,5 +1221,14 @@ mod tests {
                 .is_none()
         );
         assert!(!loop_dir.join("round-2-review-result.md").exists());
+    }
+
+    #[test]
+    fn best_effort_startup_case_value_preserves_previous_on_error() {
+        let value = best_effort_startup_case_value(Err(anyhow::anyhow!("boom")), Some("4"));
+        assert_eq!(value, "4");
+
+        let defaulted = best_effort_startup_case_value(Err(anyhow::anyhow!("boom")), None);
+        assert_eq!(defaulted, "1");
     }
 }

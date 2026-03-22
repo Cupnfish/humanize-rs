@@ -75,6 +75,16 @@
           }
         ]
       }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "humanize hook stop-failure"
+          }
+        ]
+      }
     ]
   }
 }

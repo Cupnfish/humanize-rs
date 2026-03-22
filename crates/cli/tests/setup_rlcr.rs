@@ -87,7 +87,10 @@ fn setup_rlcr_accepts_relative_plan_file_from_noncanonical_project_root() {
     let state = fs::read_to_string(loop_dir.join("state.md")).unwrap();
     assert!(state.contains("plan_file: docs/plan.md"), "state={state}");
     assert!(state.contains("plan_mode: snapshot"), "state={state}");
-    assert!(state.contains("plan_source_path: docs/plan.md"), "state={state}");
+    assert!(
+        state.contains("plan_source_path: docs/plan.md"),
+        "state={state}"
+    );
     assert!(state.contains("plan_snapshot_path:"), "state={state}");
 
     let plan_metadata = fs::symlink_metadata(loop_dir.join("plan.md")).unwrap();

@@ -300,6 +300,9 @@ enum HookCommands {
 
     /// PostToolUse hook for session handshake - reads JSON from stdin
     PostToolUse,
+
+    /// StopFailure hook for Claude API/billing/auth failures - reads JSON from stdin
+    StopFailure,
 }
 
 #[derive(Subcommand)]

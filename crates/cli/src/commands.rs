@@ -113,6 +113,14 @@ use hook_validation::{
 
 /// Handle hook commands - all read JSON from stdin.
 pub fn handle_hook(cmd: HookCommands) -> Result<()> {
+    if matches!(cmd, HookCommands::StopFailure) {
+        match read_hook_input(false) {
+            Ok(input) => stop::handle_stop_failure_hook(&input)?,
+            Err(e) => eprintln!("Error: Could not parse StopFailure hook input: {}", e),
+        }
+        return Ok(());
+    }
+
     let hook_event = match cmd {
         HookCommands::PlanFileValidator => HookEventKind::UserPromptSubmit,
         HookCommands::PostToolUse => HookEventKind::PostToolUse,
@@ -120,6 +128,7 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
         | HookCommands::WriteValidator
         | HookCommands::EditValidator
         | HookCommands::BashValidator => HookEventKind::PreToolUse,
+        HookCommands::StopFailure => unreachable!("handled above"),
     };
 
     let require_tool_name = !matches!(cmd, HookCommands::PlanFileValidator);
@@ -139,6 +148,7 @@ pub fn handle_hook(cmd: HookCommands) -> Result<()> {
         HookCommands::BashValidator => validate_bash(&input),
         HookCommands::PlanFileValidator => validate_plan_file(&input),
         HookCommands::PostToolUse => handle_post_tool_use(&input),
+        HookCommands::StopFailure => unreachable!("handled above"),
     };
 
     result.print_for(hook_event);
@@ -279,8 +289,7 @@ mod tests {
             tool_name: String::new(),
             tool_input: json!(null),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         });
         unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
 
@@ -305,8 +314,7 @@ mod tests {
             tool_name: String::new(),
             tool_input: json!({}),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         });
         unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
 
@@ -331,8 +339,7 @@ mod tests {
             tool_name: String::new(),
             tool_input: json!({}),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         });
         unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
 
@@ -360,8 +367,7 @@ mod tests {
             tool_name: String::new(),
             tool_input: json!({}),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         });
         unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR") };
 
@@ -377,8 +383,7 @@ mod tests {
                 "file_path": "/tmp/project/.humanize/pr-loop/2026-01-18_12-00-00/round-1-pr-comment.md"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_write(&input);
@@ -399,8 +404,7 @@ mod tests {
                 "file_path": "/tmp/project/.humanize/pr-loop/2026-01-18_12-00-00/round-1-pr-check.md"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_edit(&input);
@@ -426,8 +430,7 @@ mod tests {
                 "command": "git add -A"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_bash(&input);
@@ -449,8 +452,7 @@ mod tests {
                 "command": "python -c \"open('.humanize/rlcr/2026-01-18_12-00-00/state.md','w').write('x')\""
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_bash(&input);
@@ -477,8 +479,7 @@ mod tests {
                 "command": "exec 3>.humanize/rlcr/2026-01-18_12-00-00/state.md"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_bash(&input);
@@ -499,8 +500,7 @@ mod tests {
                 "command": "printf 'x' &>> .humanize/rlcr/2026-01-18_12-00-00/round-1-summary.md"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_bash(&input);
@@ -521,8 +521,7 @@ mod tests {
                 "command": "sh -c 'rm state.md'"
             }),
             session_id: None,
-            tool_output: None,
-            tool_result: None,
+            ..HookInput::default()
         };
 
         let result = validate_bash(&input);
@@ -542,8 +541,7 @@ mod tests {
                 tool_name: "Bash".to_string(),
                 tool_input: json!({ "command": command }),
                 session_id: None,
-                tool_output: None,
-                tool_result: None,
+                ..HookInput::default()
             };
             let result = validate_bash(&input);
             assert_eq!(result.decision, "allow", "command={command}");

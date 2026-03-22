@@ -73,15 +73,25 @@ impl TestRepo {
     }
 
     fn write_state(&self, review_started: bool, current_round: u32) {
+        self.write_state_with_session(review_started, current_round, None);
+    }
+
+    fn write_state_with_session(
+        &self,
+        review_started: bool,
+        current_round: u32,
+        session_id: Option<&str>,
+    ) {
         let branch = self.branch();
         fs::write(
             self.loop_dir.join("state.md"),
             format!(
-                "---\ncurrent_round: {}\nmax_iterations: 10\ncodex_model: gpt-5.4\ncodex_effort: xhigh\ncodex_timeout: 5400\npush_every_round: false\nfull_review_round: 5\nplan_file: plans/test-plan.md\nplan_tracked: false\nstart_branch: {}\nbase_branch: {}\nbase_commit: deadbeef\nreview_started: {}\nask_codex_question: true\nsession_id:\nagent_teams: false\n---\n",
+                "---\ncurrent_round: {}\nmax_iterations: 10\ncodex_model: gpt-5.4\ncodex_effort: xhigh\ncodex_timeout: 5400\npush_every_round: false\nfull_review_round: 5\nplan_file: plans/test-plan.md\nplan_tracked: false\nstart_branch: {}\nbase_branch: {}\nbase_commit: deadbeef\nreview_started: {}\nask_codex_question: true\nsession_id: {}\nagent_teams: false\n---\n",
                 current_round,
                 branch,
                 branch,
-                if review_started { "true" } else { "false" }
+                if review_started { "true" } else { "false" },
+                session_id.unwrap_or("")
             ),
         )
         .unwrap();
@@ -192,6 +202,102 @@ fn non_complete_feedback_increments_round_and_writes_review_result() {
     assert!(repo.loop_dir.join("round-3-review-result.md").exists());
     let prompt = fs::read_to_string(repo.loop_dir.join("round-4-prompt.md")).unwrap();
     assert!(prompt.contains("Issue 1"));
+}
+
+#[test]
+fn non_complete_feedback_uses_compact_prompt_when_inline_prompt_is_too_large() {
+    let repo = TestRepo::new();
+    repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n- two\n- three\n");
+    repo.write_state(false, 3);
+    repo.write_goal_tracker();
+    fs::write(
+        repo.loop_dir.join("round-3-summary.md"),
+        "# Round 3 Summary\nImplemented some features.\n",
+    )
+    .unwrap();
+    let bin_dir = repo.mock_codex(
+        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  printf '## Review Feedback\\n\\n'; printf 'A%.0s' {1..2000}; printf '\\n'\nfi\n",
+    );
+
+    let output = Command::new(bin())
+        .args(["stop", "rlcr"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .env("HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES", "256")
+        .env(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"decision\":\"block\""), "stdout={stdout}");
+    assert!(
+        stdout.contains("round-3-review-result.md"),
+        "stdout={stdout}"
+    );
+
+    let prompt = fs::read_to_string(repo.loop_dir.join("round-4-prompt.md")).unwrap();
+    assert!(
+        prompt.contains("round-3-review-result.md"),
+        "prompt={prompt}"
+    );
+    assert!(
+        prompt.contains("Read that file carefully"),
+        "prompt={prompt}"
+    );
+    assert!(!prompt.contains(&"A".repeat(512)), "prompt={prompt}");
+}
+
+#[test]
+fn stop_rlcr_allows_exit_after_relevant_stop_failure_reentry() {
+    let repo = TestRepo::new();
+    repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n");
+    repo.write_state_with_session(false, 1, Some("session-stop-failure"));
+
+    let mut stop_failure = Command::new(bin())
+        .args(["hook", "stop-failure"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = stop_failure.stdin.as_mut().unwrap();
+        write!(
+            stdin,
+            "{{\"session_id\":\"session-stop-failure\",\"error\":\"billing_error\",\"last_assistant_message\":\"Blocked by stop hook\"}}"
+        )
+        .unwrap();
+    }
+    let stop_failure_output = stop_failure.wait_with_output().unwrap();
+    assert!(stop_failure_output.status.success());
+
+    let mut child = Command::new(bin())
+        .args(["stop", "rlcr"])
+        .env("CLAUDE_PROJECT_DIR", repo.root())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        write!(
+            stdin,
+            "{{\"session_id\":\"session-stop-failure\",\"stop_hook_active\":true,\"last_assistant_message\":\"Blocked by stop hook\"}}"
+        )
+        .unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(repo.loop_dir.join("state.md").exists());
 }
 
 #[test]
@@ -388,7 +494,10 @@ fn missing_codex_binary_blocks_with_retry_message() {
     assert!(stdout.contains("Codex review failed."), "stdout={stdout}");
     assert!(stdout.contains("Codex process IO error"), "stdout={stdout}");
     assert!(stdout.contains("Please retry the exit."), "stdout={stdout}");
-    assert!(stdout.contains("Loop: Blocked - codex exec failed"), "stdout={stdout}");
+    assert!(
+        stdout.contains("Loop: Blocked - codex exec failed"),
+        "stdout={stdout}"
+    );
 }
 
 fn run(cmd: &mut Command) {

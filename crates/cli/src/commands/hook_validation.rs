@@ -1186,7 +1186,10 @@ pub(super) fn validate_plan_file(input: &HookInput) -> HookOutput {
         PlanMode::Snapshot => {}
         PlanMode::SourceClean => {
             if plan_is_tracked {
-                let plan_git_status = match git_path_status_porcelain(Path::new(&project_root), source_path) {
+                let plan_git_status = match git_path_status_porcelain(
+                    Path::new(&project_root),
+                    source_path,
+                ) {
                     Ok(status) => status,
                     Err(GitPathCheckError::Failed(code)) => {
                         return HookOutput::block(format!(
@@ -1218,7 +1221,10 @@ pub(super) fn validate_plan_file(input: &HookInput) -> HookOutput {
                 ));
             }
 
-            let plan_git_status = match git_path_status_porcelain(Path::new(&project_root), source_path) {
+            let plan_git_status = match git_path_status_porcelain(
+                Path::new(&project_root),
+                source_path,
+            ) {
                 Ok(status) => status,
                 Err(GitPathCheckError::Failed(code)) => {
                     return HookOutput::block(format!(
@@ -1380,7 +1386,10 @@ mod tests {
         let repo = init_git_repo();
         std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
 
-        assert!(git_adds_humanize("git -C subdir add .humanize", repo.path()));
+        assert!(git_adds_humanize(
+            "git -C subdir add .humanize",
+            repo.path()
+        ));
     }
 
     #[test]
@@ -1388,8 +1397,14 @@ mod tests {
         let repo = init_git_repo();
         std::fs::create_dir_all(repo.path().join(".humanize/rlcr")).unwrap();
 
-        assert!(git_adds_humanize("cd repo && git add .humanize", repo.path()));
-        assert!(git_adds_humanize("git add . && git commit -m 'msg'", repo.path()));
+        assert!(git_adds_humanize(
+            "cd repo && git add .humanize",
+            repo.path()
+        ));
+        assert!(git_adds_humanize(
+            "git add . && git commit -m 'msg'",
+            repo.path()
+        ));
     }
 
     #[test]

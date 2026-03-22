@@ -295,6 +295,177 @@ fn stop_pr_comments_with_issues_advance_round_and_write_feedback() {
     assert!(state.contains("active_bots:"));
 }
 
+#[test]
+fn stop_pr_comments_with_issues_use_compact_feedback_when_inline_prompt_is_too_large() {
+    let env = PrStopEnv::new();
+    write_fixture(
+        env.fixtures(),
+        "pr-reviews.json",
+        r#"[{"id":4001,"user":{"login":"chatgpt-codex-connector[bot]"},"submitted_at":"2026-01-18T11:15:00Z","body":"Please fix the edge case in parser","state":"COMMENTED"}]"#,
+    );
+    env.mock_codex(
+        "#!/bin/bash\nif [[ \"$1\" == \"exec\" ]]; then\n  cat >/dev/null\n  printf '### Per-Bot Status\\n| Bot | Status | Summary |\\n|-----|--------|---------|\\n| codex | ISSUES | '; printf 'A%.0s' {1..2000}; printf '\\n\\n### Issues Found\\n- '; printf 'B%.0s' {1..2000}; printf '\\n\\n### Approved Bots\\n\\n### Final Recommendation\\nISSUES_REMAINING\\n'\nfi\n",
+    );
+    env.write_state(State {
+        current_round: 0,
+        max_iterations: 42,
+        start_branch: env.branch(),
+        codex_model: "gpt-5.4".to_string(),
+        codex_effort: "medium".to_string(),
+        codex_timeout: 900,
+        pr_number: Some(123),
+        configured_bots: Some(vec!["codex".to_string()]),
+        active_bots: Some(vec!["codex".to_string()]),
+        poll_interval: Some(1),
+        poll_timeout: Some(2),
+        started_at: Some("2026-01-18T10:00:00Z".to_string()),
+        startup_case: Some("2".to_string()),
+        latest_commit_sha: Some(env.head_sha()),
+        latest_commit_at: Some("2026-01-18T10:00:00Z".to_string()),
+        ..State::default()
+    });
+    env.write_resolve(0);
+
+    let output = env
+        .env_cmd()
+        .env("HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES", "256")
+        .args(["stop", "pr"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("round-1-pr-check.md"), "stdout={stdout}");
+
+    let feedback = fs::read_to_string(env.loop_dir.join("round-1-pr-feedback.md")).unwrap();
+    assert!(
+        feedback.contains("round-1-pr-check.md"),
+        "feedback={feedback}"
+    );
+    assert!(
+        feedback.contains("Read that file carefully"),
+        "feedback={feedback}"
+    );
+    assert!(!feedback.contains(&"A".repeat(512)), "feedback={feedback}");
+}
+
+#[test]
+fn stop_pr_reaction_api_failure_does_not_abort_flow() {
+    let env = PrStopEnv::new();
+    env.write_state(State {
+        current_round: 0,
+        max_iterations: 42,
+        start_branch: env.branch(),
+        codex_model: "gpt-5.4".to_string(),
+        codex_effort: "medium".to_string(),
+        codex_timeout: 900,
+        pr_number: Some(123),
+        configured_bots: Some(vec!["codex".to_string()]),
+        active_bots: Some(vec!["codex".to_string()]),
+        poll_interval: Some(1),
+        poll_timeout: Some(1),
+        started_at: Some("2026-01-18T10:00:00Z".to_string()),
+        startup_case: Some("1".to_string()),
+        latest_commit_sha: Some(env.head_sha()),
+        latest_commit_at: Some("2026-01-18T10:00:00Z".to_string()),
+        ..State::default()
+    });
+    env.write_resolve(0);
+
+    let output = env
+        .env_cmd()
+        .env("MOCK_GH_FAIL_REACTIONS", "true")
+        .args(["stop", "pr"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        env.loop_dir.join("approve-state.md").exists() || env.loop_dir.join("state.md").exists(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn stop_pr_allows_exit_after_relevant_stop_failure_reentry() {
+    let env = PrStopEnv::new();
+    env.write_state(State {
+        current_round: 1,
+        max_iterations: 42,
+        start_branch: env.branch(),
+        codex_model: "gpt-5.4".to_string(),
+        codex_effort: "medium".to_string(),
+        codex_timeout: 900,
+        pr_number: Some(123),
+        configured_bots: Some(vec!["codex".to_string()]),
+        active_bots: Some(vec!["codex".to_string()]),
+        poll_interval: Some(1),
+        poll_timeout: Some(2),
+        started_at: Some("2026-01-18T10:00:00Z".to_string()),
+        startup_case: Some("3".to_string()),
+        latest_commit_sha: Some(env.head_sha()),
+        latest_commit_at: Some("2026-01-18T10:00:00Z".to_string()),
+        session_id: Some("session-stop-failure".to_string()),
+        ..State::default()
+    });
+    env.write_resolve(1);
+
+    let mut stop_failure = env
+        .env_cmd()
+        .args(["hook", "stop-failure"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let stdin = stop_failure.stdin.as_mut().unwrap();
+        write!(
+            stdin,
+            "{{\"session_id\":\"session-stop-failure\",\"error\":\"rate_limit\",\"last_assistant_message\":\"Blocked by stop hook\"}}"
+        )
+        .unwrap();
+    }
+    let stop_failure_output = stop_failure.wait_with_output().unwrap();
+    assert!(stop_failure_output.status.success());
+
+    let output = env
+        .env_cmd()
+        .args(["stop", "pr"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.as_mut() {
+                write!(
+                    stdin,
+                    "{{\"session_id\":\"session-stop-failure\",\"stop_hook_active\":true,\"last_assistant_message\":\"Blocked by stop hook\"}}"
+                )?;
+            }
+            child.wait_with_output()
+        })
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(env.loop_dir.join("state.md").exists());
+}
+
 fn write_fixture(dir: &Path, name: &str, contents: &str) {
     fs::write(dir.join(name), contents).unwrap();
 }
