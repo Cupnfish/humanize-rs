@@ -139,12 +139,17 @@ fn resume_rlcr_native() -> Result<()> {
             std::process::exit(3);
         }
     };
-    let mut state = humanize_core::state::State::from_markdown_strict(&state_content)
-        .unwrap_or_else(|_| {
-            println!("MALFORMED_STATE");
-            println!("Malformed RLCR state file, cannot resume safely");
-            std::process::exit(3);
-        });
+    let mut state = match humanize_core::state::State::from_markdown_strict(&state_content) {
+        Ok(state) => state,
+        Err(_) => {
+            return resume_rlcr_legacy_recovery(
+                &project_root,
+                &loop_dir,
+                &state_file,
+                &state_content,
+            );
+        }
+    };
 
     arm_resume_session_handshake(
         &project_root,
@@ -188,6 +193,45 @@ fn resume_rlcr_native() -> Result<()> {
     );
     println!("Action File: {}", action_path);
     println!("Session Rebind: armed");
+    println!();
+    print!("{}", action_content);
+    if !action_content.ends_with('\n') {
+        println!();
+    }
+    Ok(())
+}
+
+fn resume_rlcr_legacy_recovery(
+    project_root: &Path,
+    loop_dir: &Path,
+    state_file: &Path,
+    state_content: &str,
+) -> Result<()> {
+    let state = humanize_core::state::State::from_markdown(state_content).unwrap_or_else(|_| {
+        println!("MALFORMED_STATE");
+        println!("Malformed RLCR state file, cannot resume safely");
+        std::process::exit(3);
+    });
+
+    let (phase, action_path, action_content) =
+        rlcr_resume_action(project_root, loop_dir, state_file, &state)?;
+
+    println!("=== resume-rlcr-loop ===\n");
+    println!("Loop Directory: {}", loop_dir.display());
+    println!("State File: {}", state_file.display());
+    println!("Status: {}", state_status_label(&state_file));
+    println!("Phase: {}", phase);
+    println!("Round: {} / {}", state.current_round, state.max_iterations);
+    println!("State Schema: legacy");
+    println!("Session Rebind: skipped");
+    println!();
+    println!(
+        "This RLCR loop was started by an older Humanize version. The loop data is still intact, but the current CLI cannot safely rebind the host session to this state."
+    );
+    println!(
+        "Use the artifacts below to recover unfinished work, then start a new RLCR loop if you need current-version automation."
+    );
+    println!("Action File: {}", action_path);
     println!();
     print!("{}", action_content);
     if !action_content.ends_with('\n') {
@@ -294,21 +338,37 @@ fn rlcr_resume_action(
         ));
     }
 
-    let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
-    if prompt_file.exists() {
-        let phase = if state.review_started {
-            "review-fix"
-        } else {
-            "implementation"
-        };
-        return Ok((
-            phase.to_string(),
-            prompt_file.display().to_string(),
-            fs::read_to_string(&prompt_file)?,
-        ));
-    }
-
     if state.review_started {
+        let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
+        let review_result_file =
+            loop_dir.join(format!("round-{}-review-result.md", state.current_round));
+        let skip_impl_marker = loop_dir.join(".review-phase-started");
+        let skip_impl_ready = skip_impl_marker.exists()
+            && prompt_file.exists()
+            && !review_result_file.exists()
+            && !loop_dir
+                .join(format!(
+                    "round-{}-review-prompt.md",
+                    state.current_round + 1
+                ))
+                .exists();
+
+        if review_result_file.exists() && prompt_file.exists() {
+            return Ok((
+                "review-fix".to_string(),
+                prompt_file.display().to_string(),
+                fs::read_to_string(&prompt_file)?,
+            ));
+        }
+
+        if skip_impl_ready {
+            return Ok((
+                "review-ready".to_string(),
+                prompt_file.display().to_string(),
+                fs::read_to_string(&prompt_file)?,
+            ));
+        }
+
         let review_round = state.current_round + 1;
         let review_prompt = loop_dir.join(format!("round-{}-review-prompt.md", review_round));
         let review_log = rlcr_cache_dir(project_root, loop_dir)
@@ -329,6 +389,35 @@ fn rlcr_resume_action(
             content.push_str(&format!("Review Log: {}\n", log_path.display()));
         }
         return Ok(("review-pending".to_string(), action_path, content));
+    }
+
+    let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
+    if prompt_file.exists() {
+        return Ok((
+            "implementation".to_string(),
+            prompt_file.display().to_string(),
+            fs::read_to_string(&prompt_file)?,
+        ));
+    }
+
+    if state.current_round > 0 {
+        let previous_round = state.current_round - 1;
+        let previous_review_result =
+            loop_dir.join(format!("round-{}-review-result.md", previous_round));
+        let summary_file = loop_dir.join(format!("round-{}-summary.md", state.current_round));
+        if previous_review_result.exists() {
+            return Ok((
+                "implementation".to_string(),
+                previous_review_result.display().to_string(),
+                format!(
+                    "# Resume Implementation\n\nThe loop is in implementation phase for round {}.\n\nThe next round prompt file is missing, but the previous Codex review result is still available.\n\n- Review Result: {}\n- Write Summary To: {}\n- Loop Directory: {}\n",
+                    state.current_round,
+                    previous_review_result.display(),
+                    summary_file.display(),
+                    loop_dir.display()
+                ),
+            ));
+        }
     }
 
     let fallback_path = loop_dir.join("goal-tracker.md");

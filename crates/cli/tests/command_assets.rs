@@ -11,6 +11,7 @@ fn command_files_use_native_cli_not_legacy_scripts() {
     let repo_root = manifest_dir.join("../..");
 
     let command_files = [
+        "commands/gen-draft.md",
         "commands/start-rlcr-loop.md",
         "commands/start-pr-loop.md",
         "commands/cancel-rlcr-loop.md",
@@ -49,6 +50,7 @@ fn command_files_have_valid_frontmatter() {
     let repo_root = manifest_dir.join("../..");
 
     let command_files = [
+        "commands/gen-draft.md",
         "commands/start-rlcr-loop.md",
         "commands/start-pr-loop.md",
         "commands/cancel-rlcr-loop.md",

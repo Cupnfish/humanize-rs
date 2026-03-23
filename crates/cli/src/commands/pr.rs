@@ -39,14 +39,14 @@ pub(super) struct PrLookupContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct StopHookPromptConfig {
-    compact_large_prompts: bool,
-    max_inline_bytes: usize,
+pub(super) struct StopHookPromptConfig {
+    pub(super) compact_large_prompts: bool,
+    pub(super) max_inline_bytes: usize,
 }
 
 const STOP_HOOK_COMPACT_PROMPTS_ENV: &str = "HUMANIZE_STOP_HOOK_COMPACT_PROMPTS";
 const STOP_HOOK_PROMPT_MAX_INLINE_BYTES_ENV: &str = "HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES";
-const STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES: usize = 16 * 1024;
+const STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES: usize = 8 * 1024;
 const GH_API_MAX_RETRIES: usize = 3;
 const GH_API_RETRY_DELAY_SECS: u64 = 2;
 
@@ -1006,7 +1006,7 @@ pub(super) fn build_impl_review_prompt(
     }
 }
 
-fn stop_hook_prompt_config() -> StopHookPromptConfig {
+pub(super) fn stop_hook_prompt_config() -> StopHookPromptConfig {
     StopHookPromptConfig {
         compact_large_prompts: std::env::var(STOP_HOOK_COMPACT_PROMPTS_ENV)
             .map(|value| {
@@ -1022,7 +1022,7 @@ fn stop_hook_prompt_config() -> StopHookPromptConfig {
     }
 }
 
-fn maybe_compact_stop_hook_prompt<F>(inline_prompt: String, compact_builder: F) -> String
+pub(super) fn maybe_compact_stop_hook_prompt<F>(inline_prompt: String, compact_builder: F) -> String
 where
     F: FnOnce() -> String,
 {

@@ -86,15 +86,34 @@ enum Commands {
     #[command(subcommand)]
     Config(ConfigCommands),
 
+    /// Capture a planning draft into .humanize
+    GenDraft {
+        /// Input draft file (legacy / automation mode)
+        #[arg(short, long)]
+        input: Option<String>,
+
+        /// Optional title override used for the generated handle
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Read draft content from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+
     /// Generate implementation plan from draft
     GenPlan {
-        /// Input draft file
+        /// Input draft file (legacy / automation mode)
         #[arg(short, long)]
-        input: String,
+        input: Option<String>,
 
-        /// Output plan file
+        /// Output plan file (legacy / automation mode)
         #[arg(short, long)]
-        output: String,
+        output: Option<String>,
+
+        /// Draft handle stored under .humanize/planning
+        #[arg(long)]
+        draft: Option<String>,
 
         /// Internal mode: only validate IO and prepare the output scaffold
         #[arg(long, hide = true)]
@@ -155,12 +174,16 @@ enum Commands {
 enum SetupCommands {
     /// Start an RLCR loop
     Rlcr {
-        /// Path to the plan file
+        /// Path to the plan file (legacy positional path mode)
         plan_file: Option<String>,
 
-        /// Explicit plan file path
+        /// Explicit plan file path (legacy path mode)
         #[arg(long = "plan-file")]
         plan_file_explicit: Option<String>,
+
+        /// Plan handle stored under .humanize/planning
+        #[arg(long)]
+        plan: Option<String>,
 
         /// Require the plan file to remain tracked in git
         #[arg(long)]
@@ -405,16 +428,23 @@ fn run() -> Result<()> {
             timeout,
         } => commands::handle_ask_codex(&prompt.join(" "), &model, &effort, timeout),
         Commands::Config(config_cmd) => commands::handle_config(config_cmd),
+        Commands::GenDraft {
+            input,
+            title,
+            stdin,
+        } => commands::handle_gen_draft(input.as_deref(), title.as_deref(), stdin),
         Commands::GenPlan {
             input,
             output,
+            draft,
             prepare_only,
             discussion,
             direct,
             auto_start_rlcr_if_converged,
         } => commands::handle_gen_plan(
-            &input,
-            &output,
+            input.as_deref(),
+            output.as_deref(),
+            draft.as_deref(),
             prepare_only,
             discussion,
             direct,

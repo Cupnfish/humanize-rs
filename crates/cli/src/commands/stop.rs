@@ -646,10 +646,124 @@ fn collect_incomplete_todos(value: &serde_json::Value, latest: &mut Option<Vec<S
     }
 }
 
+fn utf8_prefix_at_most(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+
+    let mut end = 0;
+    for (idx, ch) in text.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+    &text[..end]
+}
+
+fn utf8_suffix_at_most(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+
+    let mut start = text.len();
+    for (idx, _) in text.char_indices().rev() {
+        if text.len() - idx > max_bytes {
+            break;
+        }
+        start = idx;
+    }
+    &text[start..]
+}
+
+const COMPACT_REASON_SEPARATOR: &str = "\n\n...\n\n";
+
+fn important_stop_hook_reason_lines(reason: &str, max_inline_bytes: usize) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut push_line = |line: &str| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || lines.iter().any(|existing: &String| existing == trimmed) {
+            return;
+        }
+        let mut candidate = lines.clone();
+        candidate.push(trimmed.to_string());
+        let preview = candidate.join("\n\n");
+        if preview.len() <= max_inline_bytes {
+            lines.push(trimmed.to_string());
+        }
+    };
+
+    if let Some(first) = reason.lines().find(|line| !line.trim().is_empty()) {
+        push_line(first);
+    }
+
+    if let Some(line) = reason.lines().find(|line| {
+        let trimmed = line.trim().to_ascii_lowercase();
+        trimmed.contains(".md")
+            && (trimmed.contains("review")
+                || trimmed.contains("check")
+                || trimmed.contains("feedback")
+                || trimmed.contains("result"))
+    }) {
+        push_line(line);
+    }
+
+    for needle in [
+        ".md",
+        "Read that file carefully",
+        "Write your summary to:",
+        "Write your resolution summary to:",
+    ] {
+        if let Some(line) = reason.lines().find(|line| line.trim().contains(needle)) {
+            push_line(line);
+        }
+    }
+
+    (lines.len() > 1).then(|| lines.join("\n\n"))
+}
+
+fn compact_stop_hook_reason(reason: &str, max_inline_bytes: usize) -> Option<String> {
+    if reason.len() <= max_inline_bytes {
+        return None;
+    }
+
+    if let Some(summary) = important_stop_hook_reason_lines(reason, max_inline_bytes) {
+        return Some(summary);
+    }
+
+    let available = max_inline_bytes.saturating_sub(COMPACT_REASON_SEPARATOR.len());
+
+    if available == 0 {
+        return Some(utf8_prefix_at_most(reason, max_inline_bytes).to_string());
+    }
+
+    let prefix_budget = available / 2;
+    let suffix_budget = available.saturating_sub(prefix_budget);
+    let mut compacted = utf8_prefix_at_most(reason, prefix_budget)
+        .trim_end()
+        .to_string();
+    compacted.push_str(COMPACT_REASON_SEPARATOR);
+    compacted.push_str(utf8_suffix_at_most(reason, suffix_budget).trim_start());
+
+    if compacted.len() > max_inline_bytes {
+        compacted = utf8_prefix_at_most(&compacted, max_inline_bytes).to_string();
+    }
+
+    Some(compacted)
+}
+
 fn emit_stop_block(reason: &str, system_message: Option<&str>) -> Result<()> {
+    let config = stop_hook_prompt_config();
+    let reason = if config.compact_large_prompts {
+        compact_stop_hook_reason(reason, config.max_inline_bytes)
+            .unwrap_or_else(|| reason.to_string())
+    } else {
+        reason.to_string()
+    };
     let output = StopHookOutput {
         decision: "block".to_string(),
-        reason: reason.to_string(),
+        reason,
         system_message: system_message.map(|msg| msg.to_string()),
     };
     println!("{}", serde_json::to_string(&output)?);
@@ -1230,5 +1344,20 @@ mod tests {
 
         let defaulted = best_effort_startup_case_value(Err(anyhow::anyhow!("boom")), None);
         assert_eq!(defaulted, "1");
+    }
+
+    #[test]
+    fn compact_stop_hook_reason_keeps_small_payloads() {
+        assert!(compact_stop_hook_reason("short", 128).is_none());
+    }
+
+    #[test]
+    fn compact_stop_hook_reason_truncates_large_payloads_with_notice() {
+        let reason = "A".repeat(512);
+        let compacted = compact_stop_hook_reason(&reason, 220).unwrap();
+
+        assert!(compacted.len() <= 220, "compacted={compacted}");
+        assert!(compacted.contains("..."), "compacted={compacted}");
+        assert_ne!(compacted, reason);
     }
 }

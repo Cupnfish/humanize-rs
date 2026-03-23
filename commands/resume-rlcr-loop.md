@@ -1,37 +1,46 @@
 ---
-description: "Resume active RLCR loop"
+description: "Recover and continue active RLCR loop"
 allowed-tools: ["Bash(humanize resume rlcr)"]
 hide-from-slash-command-tool: "true"
 ---
 
 # Resume RLCR Loop
 
-To resume the active RLCR loop:
-
-1. Run the resume command:
+Execute the resume command and treat its output as the authoritative loop state:
 
 ```bash
 humanize resume rlcr
 ```
 
-2. Handle the result:
-   - If the first line is `NO_LOOP` or `NO_ACTIVE_LOOP`: Say "No active RLCR loop found."
-   - If the first line is `MALFORMED_STATE`: Surface that error and stop
-   - If the command succeeds: Continue to step 3
+## Handle Result
 
-3. Use the command output as the authoritative resume state. The command prints:
-   - loop metadata (`Loop Directory`, `State File`, `Status`, `Phase`, `Round`, `Plan File`, `Start Branch`, `Base Branch`)
-   - the `Action File`
-   - `Session Rebind: armed`
-   - the action content you should continue from
+Check the first line of output:
 
-## Phase Handling
+- `NO_LOOP` or `NO_ACTIVE_LOOP`: Say "No active RLCR loop found."
+- `MALFORMED_STATE`: Surface the error and stop
+- Otherwise: Continue from the printed resume state below. Do not inspect `.humanize/` manually to second-guess the phase.
 
-The command resumes the RLCR loop by detecting the current phase and replaying the correct artifact:
+## Continue From Output
 
-- **`implementation`**: Replay `round-N-prompt.md` when it exists, or fall back to the latest goal-tracker-based resume instructions
-- **`review-fix`**: Replay the current round prompt while the loop is in review correction mode
-- **`review-pending`**: No local fix prompt is pending. Continue working in the host, then stop again so Humanize can retry Codex review
-- **`finalize`**: Resume the Finalize Phase using `finalize-summary.md`. If the file does not exist yet, the command creates it first
+The command already determines the active phase and chooses the correct action file. Use the output as-is:
 
-**Key principle**: Resume does not start a new loop. The command finds the newest active RLCR loop under `.humanize/rlcr/`, clears the stale session binding, arms `.humanize/.pending-session-id`, and replays the current action file so work continues from the existing state.
+- loop metadata (`Loop Directory`, `State File`, `Status`, `Phase`, `Round`, `Plan File`, `Start Branch`, `Base Branch`)
+- `Action File`
+- `Session Rebind`
+- the action content to continue from
+
+Use these rules:
+
+- If `Session Rebind: armed`, continue directly from the printed action content
+- If `Session Rebind: skipped`, the loop is legacy recovery mode. Use the printed artifacts to recover unfinished work, but do not claim the host session was rebound
+- Do not start a new RLCR loop just because the current phase is unusual. `resume` is specifically for continuing the existing loop
+
+## Phase Meanings
+
+The command can surface these RLCR phases:
+
+- **`implementation`**: Continue the current implementation round. If the round prompt is missing, the command may fall back to the previous review result plus the summary file target for the current round
+- **`review-fix`**: The code review phase already found issues for the current round. Continue from the printed fix prompt and address those issues
+- **`review-pending`**: Review phase has started, but no local fix prompt is currently pending. Continue working in the host, then stop again so Humanize can retry Codex review
+- **`review-ready`**: A `--skip-impl` loop is waiting for its first review cycle. Follow the printed prompt and stop when ready for review
+- **`finalize`**: Resume the Finalize Phase using `finalize-summary.md`. If the file is missing, the command creates it first

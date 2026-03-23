@@ -1,3 +1,4 @@
+use super::planning::PlanningStore;
 use super::pr::*;
 use super::*;
 
@@ -38,8 +39,9 @@ struct PreparedGenPlan {
 }
 
 pub(super) fn handle_gen_plan(
-    input: &str,
-    output: &str,
+    input: Option<&str>,
+    output: Option<&str>,
+    draft: Option<&str>,
     prepare_only: bool,
     discussion: bool,
     direct: bool,
@@ -56,11 +58,26 @@ pub(super) fn handle_gen_plan(
     }
 
     if prepare_only {
+        let input = input.ok_or_else(|| anyhow::anyhow!("--prepare-only requires --input"))?;
+        let output = output.ok_or_else(|| anyhow::anyhow!("--prepare-only requires --output"))?;
+        if draft.is_some() {
+            bail!("--prepare-only does not support --draft");
+        }
         prepare_gen_plan_output(input, output)?;
         return Ok(());
     }
 
-    gen_plan_native(input, output)
+    match (input, output, draft) {
+        (Some(input), Some(output), None) => gen_plan_native(input, output),
+        (None, None, draft) => gen_plan_from_artifact(draft, !direct),
+        (Some(_), None, _) | (None, Some(_), _) => {
+            bail!("gen-plan requires both --input and --output together in legacy mode.")
+        }
+        (_, _, Some(_)) if input.is_some() || output.is_some() => {
+            bail!("Cannot combine --draft with --input/--output.")
+        }
+        _ => bail!("gen-plan requires either --draft <handle> or --input/--output."),
+    }
 }
 
 fn gen_plan_native(input: &str, output: &str) -> Result<()> {
@@ -123,6 +140,22 @@ fn gen_plan_native(input: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
+fn gen_plan_from_artifact(draft_handle: Option<&str>, converged: bool) -> Result<()> {
+    let project_root = resolve_project_root()?;
+    let mut store = PlanningStore::load(&project_root)?;
+    let draft = store.resolve_draft_for_gen_plan(draft_handle)?;
+
+    let plan_content =
+        generate_plan_content(&project_root, &draft.markdown, &load_plan_template()?)?;
+    let plan = store.create_plan(&draft, &plan_content, converged)?;
+
+    println!("Draft Handle: {}", draft.handle);
+    println!("Plan Handle: {}", plan.handle);
+    println!("Thread: {}", plan.thread_id);
+    println!("Plan Path: {}", store.project_relative_path(&plan.path)?);
+    Ok(())
+}
+
 fn prepare_gen_plan_output(input: &str, output: &str) -> Result<PreparedGenPlan> {
     let input_path = PathBuf::from(input);
     let output_path = PathBuf::from(output);
@@ -136,9 +169,10 @@ fn prepare_gen_plan_output(input: &str, output: &str) -> Result<PreparedGenPlan>
         bail!("Input file is empty: {}", input_path.display());
     }
 
-    let output_dir = output_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Output directory does not exist"))?;
+    let output_dir = match output_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
     if !output_dir.is_dir() {
         bail!("Output directory does not exist: {}", output_dir.display());
     }
@@ -146,9 +180,7 @@ fn prepare_gen_plan_output(input: &str, output: &str) -> Result<PreparedGenPlan>
         bail!("Output file already exists: {}", output_path.display());
     }
 
-    let template = embedded_template_contents("plan/gen-plan-template.md")
-        .context("Plan template file not found")?
-        .to_string();
+    let template = load_plan_template()?;
     let project_root = resolve_project_root()?;
 
     let scaffold = format!(
@@ -164,6 +196,66 @@ fn prepare_gen_plan_output(input: &str, output: &str) -> Result<PreparedGenPlan>
         template,
         output_path,
     })
+}
+
+fn load_plan_template() -> Result<String> {
+    embedded_template_contents("plan/gen-plan-template.md")
+        .context("Plan template file not found")
+        .map(|value| value.to_string())
+}
+
+fn generate_plan_content(project_root: &Path, draft: &str, template: &str) -> Result<String> {
+    ensure_command_exists("codex", "Error: gen-plan requires codex to be installed")?;
+
+    let mut options = humanize_core::codex::CodexOptions::from_env(project_root);
+    options.model = "gpt-5.4".to_string();
+    options.effort = "xhigh".to_string();
+    options.timeout_secs = 3600;
+
+    let repo_context = build_repo_context(project_root)?;
+    let relevance = run_gen_plan_relevance_check(draft, &repo_context, &options)?;
+    if let Some(reason) = relevance.strip_prefix("NOT_RELEVANT:") {
+        bail!(
+            "The draft content does not appear to be related to this repository.\n{}",
+            reason.trim()
+        );
+    }
+    if !relevance.starts_with("RELEVANT:") {
+        bail!(
+            "gen-plan relevance check returned invalid output: {}",
+            relevance
+        );
+    }
+
+    let analysis = run_gen_plan_analysis(draft, &repo_context, &options)?;
+    let clarifications = collect_gen_plan_issue_answers(&analysis)?;
+    let metric_answers = collect_gen_plan_metric_answers(&analysis)?;
+    let prompt = build_gen_plan_generation_prompt(
+        template,
+        draft,
+        &repo_context,
+        &clarifications,
+        &metric_answers,
+        &analysis.notes,
+    );
+
+    let result = humanize_core::codex::run_exec(&prompt, &options)
+        .map_err(|err| anyhow::anyhow!("gen-plan Codex generation failed: {}", err))?;
+    let mut content = strip_markdown_fence(&result.stdout).trim().to_string();
+    if !content.contains("--- Original Design Draft Start ---") {
+        content.push_str(&format!(
+            "\n\n--- Original Design Draft Start ---\n\n{}\n\n--- Original Design Draft End ---\n",
+            draft.trim_end()
+        ));
+    }
+
+    if should_offer_language_unification(&analysis, &content) {
+        if let Some(language) = prompt_language_unification()? {
+            content = run_gen_plan_language_unification(&content, &language, &options)?;
+        }
+    }
+
+    Ok(content)
 }
 
 fn strip_markdown_fence(content: &str) -> String {

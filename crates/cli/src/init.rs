@@ -16,6 +16,7 @@ const STAMP_FILE: &str = "humanize-plugin-sync.json";
 const CLAUDE_COMPAT_COMMANDS: &[&str] = &[
     "cancel-pr-loop.md",
     "cancel-rlcr-loop.md",
+    "gen-draft.md",
     "gen-plan.md",
     "resume-pr-loop.md",
     "resume-rlcr-loop.md",

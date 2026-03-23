@@ -1,3 +1,4 @@
+use super::planning::PlanningStore;
 use super::pr::*;
 use super::*;
 use humanize_core::state::PlanMode;
@@ -6,6 +7,7 @@ use humanize_core::state::PlanMode;
 struct SetupRlcrOptions {
     positional_plan_file: Option<String>,
     explicit_plan_file: Option<String>,
+    plan_handle: Option<String>,
     track_plan_file: bool,
     plan_lock: crate::PlanLockArg,
     max_iterations: u32,
@@ -33,6 +35,7 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
         SetupCommands::Rlcr {
             plan_file,
             plan_file_explicit,
+            plan,
             track_plan_file,
             plan_lock,
             max_iterations,
@@ -47,6 +50,7 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
         } => setup_rlcr_native(SetupRlcrOptions {
             positional_plan_file: plan_file,
             explicit_plan_file: plan_file_explicit,
+            plan_handle: plan,
             track_plan_file,
             plan_lock,
             max_iterations,
@@ -77,15 +81,24 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
 
 fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let project_root = resolve_project_root()?;
+    let mut planning_store = PlanningStore::load(&project_root)?;
 
-    let chosen_plan = match (&options.positional_plan_file, &options.explicit_plan_file) {
-        (Some(_), Some(_)) => {
+    let chosen_plan = match (
+        &options.positional_plan_file,
+        &options.explicit_plan_file,
+        &options.plan_handle,
+    ) {
+        (Some(_), Some(_), _) => {
             bail!("Error: cannot specify both positional plan file and --plan-file")
         }
-        (Some(path), None) => Some(path.clone()),
-        (None, Some(path)) => Some(path.clone()),
-        (None, None) if options.skip_impl => None,
-        (None, None) => bail!("Error: missing plan file"),
+        (Some(_), _, Some(_)) | (None, Some(_), Some(_)) => {
+            bail!("Error: cannot combine path-based plan arguments with --plan")
+        }
+        (Some(path), None, None) => Some(ResolvedSetupPlan::LegacyPath(path.clone())),
+        (None, Some(path), None) => Some(ResolvedSetupPlan::LegacyPath(path.clone())),
+        (None, None, Some(handle)) => Some(ResolvedSetupPlan::ArtifactHandle(handle.clone())),
+        (None, None, None) if options.skip_impl => None,
+        (None, None, None) => Some(ResolvedSetupPlan::DefaultArtifact),
     };
 
     let clean = humanize_core::git::is_working_tree_clean(&project_root)
@@ -121,17 +134,37 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
         plan_source_tracked_at_start,
         plan_source_sha256,
         plan_source_git_oid,
-    ) = if let Some(plan_file) = chosen_plan.clone() {
-        let validation = validate_setup_plan_file(&project_root, &plan_file, &plan_mode)?;
+        source_plan_id,
+        source_plan_revision,
+        selected_plan_id,
+    ) = if let Some(plan_choice) = chosen_plan.clone() {
+        let resolved_plan = match plan_choice {
+            ResolvedSetupPlan::LegacyPath(plan_file) => ResolvedPlanPath {
+                plan_file,
+                source_plan_id: None,
+                source_plan_revision: None,
+            },
+            ResolvedSetupPlan::ArtifactHandle(handle) => {
+                resolve_artifact_plan_path(&mut planning_store, Some(handle.as_str()))?
+            }
+            ResolvedSetupPlan::DefaultArtifact => {
+                resolve_artifact_plan_path(&mut planning_store, None)?
+            }
+        };
+        let validation =
+            validate_setup_plan_file(&project_root, &resolved_plan.plan_file, &plan_mode)?;
         line_count = validation.line_count;
         create_plan_backup(&validation.full_path, &loop_dir.join("plan.md"))?;
         (
-            plan_file.clone(),
-            plan_file,
+            resolved_plan.plan_file.clone(),
+            resolved_plan.plan_file,
             true,
             validation.tracked,
             validation.source_sha256,
             validation.source_git_oid,
+            resolved_plan.source_plan_id.clone(),
+            resolved_plan.source_plan_revision,
+            resolved_plan.source_plan_id,
         )
     } else {
         let placeholder = loop_dir.join("plan.md");
@@ -142,6 +175,9 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
             true,
             false,
             String::new(),
+            None,
+            None,
+            None,
             None,
         )
     };
@@ -159,6 +195,8 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
         plan_source_sha256,
         snapshot_plan_path,
         plan_source_git_oid,
+        source_plan_id.clone(),
+        source_plan_revision,
         start_branch.clone(),
         base_branch.clone(),
         base_commit.clone(),
@@ -173,6 +211,13 @@ fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
         options.skip_impl,
     );
     state.save(loop_dir.join("state.md"))?;
+    if let Some(plan_id) = selected_plan_id.as_deref() {
+        planning_store.mark_plan_used(
+            plan_id,
+            source_plan_revision.unwrap_or(1),
+            Some(&timestamp),
+        )?;
+    }
 
     fs::create_dir_all(project_root.join(".humanize"))?;
     let pending_session = project_root.join(".humanize/.pending-session-id");
@@ -485,12 +530,38 @@ fn parse_model_and_effort(spec: &str, default_effort: &str) -> (String, String) 
     }
 }
 
+#[derive(Debug, Clone)]
+enum ResolvedSetupPlan {
+    LegacyPath(String),
+    ArtifactHandle(String),
+    DefaultArtifact,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedPlanPath {
+    plan_file: String,
+    source_plan_id: Option<String>,
+    source_plan_revision: Option<u32>,
+}
+
 struct ValidatedPlan {
     full_path: PathBuf,
     line_count: usize,
     tracked: bool,
     source_sha256: String,
     source_git_oid: Option<String>,
+}
+
+fn resolve_artifact_plan_path(
+    planning_store: &mut PlanningStore,
+    handle: Option<&str>,
+) -> Result<ResolvedPlanPath> {
+    let artifact = planning_store.resolve_plan_for_setup(handle)?;
+    Ok(ResolvedPlanPath {
+        plan_file: planning_store.project_relative_path(&artifact.path)?,
+        source_plan_id: Some(artifact.id),
+        source_plan_revision: Some(artifact.revision),
+    })
 }
 
 fn plan_lock_mode(arg: &crate::PlanLockArg, track_plan_file: bool) -> PlanMode {

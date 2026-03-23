@@ -340,6 +340,8 @@ fn stop_pr_comments_with_issues_use_compact_feedback_when_inline_prompt_is_too_l
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("round-1-pr-check.md"), "stdout={stdout}");
+    assert!(!stdout.contains(&"A".repeat(512)), "stdout={stdout}");
+    assert!(!stdout.contains(&"B".repeat(512)), "stdout={stdout}");
 
     let feedback = fs::read_to_string(env.loop_dir.join("round-1-pr-feedback.md")).unwrap();
     assert!(

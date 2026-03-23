@@ -1,35 +1,39 @@
 ---
-description: "Resume active PR loop"
+description: "Recover and continue active PR loop"
 allowed-tools: ["Bash(humanize resume pr)"]
 hide-from-slash-command-tool: "true"
 ---
 
 # Resume PR Loop
 
-To resume the active PR loop:
-
-1. Run the resume command:
+Execute the resume command and treat its output as the authoritative PR-loop state:
 
 ```bash
 humanize resume pr
 ```
 
-2. Handle the result:
-   - If the first line is `NO_LOOP` or `NO_ACTIVE_LOOP`: Say "No active PR loop found."
-   - If the first line is `MALFORMED_STATE`: Surface that error and stop
-   - If the command succeeds: Continue to step 3
+## Handle Result
 
-3. Use the command output as the authoritative resume state. The command prints:
-   - loop metadata (`Loop Directory`, `State File`, `Status`, `Phase`, `Round`, `PR Number`, configured bots, active bots)
-   - an `Action File`
-   - the action content you should continue from
+Check the first line of output:
 
-## Phase Handling
+- `NO_LOOP` or `NO_ACTIVE_LOOP`: Say "No active PR loop found."
+- `MALFORMED_STATE`: Surface the error and stop
+- Otherwise: Continue from the printed resume state below. Do not manually re-derive the phase from `.humanize/pr-loop/`
 
-The command resumes the PR loop by replaying the most relevant artifact for the current state:
+## Continue From Output
 
-- **`bot-feedback`**: If `round-N-pr-feedback.md` exists, replay that feedback file and continue addressing the comments
-- **`initial`**: If the loop is still at round 0 and `round-0-prompt.md` exists, replay the initial startup prompt
-- **`active`**: Otherwise, continue from the current round using the existing resolve/comment files shown in the output
+The command already chooses the most relevant artifact for the active PR loop. Use the output as-is:
 
-**Key principle**: Resume does not start a new PR loop. The command finds the newest active PR loop under `.humanize/pr-loop/` and replays the current action file so work continues from the existing state.
+- loop metadata (`Loop Directory`, `State File`, `Status`, `Phase`, `Round`, `PR Number`, configured bots, active bots)
+- `Action File`
+- the action content to continue from
+
+Treat the printed action content as the next task. Do not start a new PR loop just because the current round is not round 0.
+
+## Phase Meanings
+
+The command can surface these PR phases:
+
+- **`bot-feedback`**: Replay `round-N-pr-feedback.md` and continue addressing the remaining issues
+- **`initial`**: The loop is still at round 0, so replay the initial startup prompt
+- **`active`**: Continue the current round from the printed resolve/comment artifacts

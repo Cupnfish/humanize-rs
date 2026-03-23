@@ -3,10 +3,12 @@
 mod ask_codex;
 mod config;
 mod gate;
+mod gen_draft;
 mod gen_plan;
 mod hook_validation;
 mod lifecycle;
 mod monitor;
+mod planning;
 mod pr;
 mod setup;
 mod stop;
@@ -87,10 +89,16 @@ pub fn handle_config(cmd: ConfigCommands) -> Result<()> {
     config::handle_config(cmd)
 }
 
+/// Handle gen-draft command.
+pub fn handle_gen_draft(input: Option<&str>, title: Option<&str>, stdin: bool) -> Result<()> {
+    gen_draft::handle_gen_draft(input, title, stdin)
+}
+
 /// Handle gen-plan command.
 pub fn handle_gen_plan(
-    input: &str,
-    output: &str,
+    input: Option<&str>,
+    output: Option<&str>,
+    draft: Option<&str>,
     prepare_only: bool,
     discussion: bool,
     direct: bool,
@@ -99,6 +107,7 @@ pub fn handle_gen_plan(
     gen_plan::handle_gen_plan(
         input,
         output,
+        draft,
         prepare_only,
         discussion,
         direct,

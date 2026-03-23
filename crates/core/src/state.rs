@@ -116,6 +116,14 @@ pub struct State {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_source_git_oid: Option<String>,
 
+    /// Internal planning artifact id used to start this RLCR session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_plan_id: Option<String>,
+
+    /// Revision of the internal planning artifact used to start this RLCR session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_plan_revision: Option<u32>,
+
     /// Branch where the loop started.
     #[serde(default)]
     pub start_branch: String,
@@ -235,6 +243,8 @@ impl Default for State {
             plan_source_sha256: String::new(),
             plan_snapshot_path: String::new(),
             plan_source_git_oid: None,
+            source_plan_id: None,
+            source_plan_revision: None,
             start_branch: String::new(),
             base_branch: String::new(),
             base_commit: String::new(),
@@ -377,6 +387,8 @@ impl State {
         plan_source_sha256: String,
         plan_snapshot_path: String,
         plan_source_git_oid: Option<String>,
+        source_plan_id: Option<String>,
+        source_plan_revision: Option<u32>,
         start_branch: String,
         base_branch: String,
         base_commit: String,
@@ -408,6 +420,8 @@ impl State {
             plan_source_sha256,
             plan_snapshot_path,
             plan_source_git_oid,
+            source_plan_id,
+            source_plan_revision,
             start_branch,
             base_branch,
             base_commit,
@@ -758,6 +772,8 @@ Some content below.
             false,
             "sha256".to_string(),
             ".humanize/rlcr/session/plan.md".to_string(),
+            None,
+            None,
             None,
             "master".to_string(),
             "master".to_string(),

@@ -237,6 +237,7 @@ fn non_complete_feedback_uses_compact_prompt_when_inline_prompt_is_too_large() {
         stdout.contains("round-3-review-result.md"),
         "stdout={stdout}"
     );
+    assert!(!stdout.contains(&"A".repeat(512)), "stdout={stdout}");
 
     let prompt = fs::read_to_string(repo.loop_dir.join("round-4-prompt.md")).unwrap();
     assert!(
