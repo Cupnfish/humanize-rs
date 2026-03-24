@@ -41,7 +41,7 @@ use crate::hook_input::{
     HookEventKind, HookInput, HookOutput, get_command, get_file_path, read_hook_input,
 };
 use crate::{
-    CancelCommands, ConfigCommands, GateCommands, HookCommands, MonitorCommands, ResumeCommands,
+    CancelCommands, ConfigCommands, GateCommands, HookCommands, MonitorCommands,
     SetupCommands, StopCommands,
 };
 
@@ -57,11 +57,6 @@ pub fn handle_setup(cmd: SetupCommands) -> Result<()> {
 /// Handle cancel commands.
 pub fn handle_cancel(cmd: CancelCommands) -> Result<()> {
     lifecycle::handle_cancel(cmd)
-}
-
-/// Handle resume commands.
-pub fn handle_resume(cmd: ResumeCommands) -> Result<()> {
-    lifecycle::handle_resume(cmd)
 }
 
 /// Handle monitor commands.

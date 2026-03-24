@@ -376,8 +376,6 @@ function Ensure-CacheCommands([string]$version) {
         'cancel-pr-loop',
         'cancel-rlcr-loop',
         'gen-plan',
-        'resume-pr-loop',
-        'resume-rlcr-loop',
         'start-pr-loop',
         'start-rlcr-loop'
     )

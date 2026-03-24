@@ -16,8 +16,6 @@ fn command_files_use_native_cli_not_legacy_scripts() {
         "commands/start-pr-loop.md",
         "commands/cancel-rlcr-loop.md",
         "commands/cancel-pr-loop.md",
-        "commands/resume-rlcr-loop.md",
-        "commands/resume-pr-loop.md",
         "commands/gen-plan.md",
     ];
 
@@ -55,8 +53,6 @@ fn command_files_have_valid_frontmatter() {
         "commands/start-pr-loop.md",
         "commands/cancel-rlcr-loop.md",
         "commands/cancel-pr-loop.md",
-        "commands/resume-rlcr-loop.md",
-        "commands/resume-pr-loop.md",
         "commands/gen-plan.md",
     ];
 
@@ -86,8 +82,6 @@ fn loop_command_files_reference_humanize_cli() {
         "commands/start-pr-loop.md",
         "commands/cancel-rlcr-loop.md",
         "commands/cancel-pr-loop.md",
-        "commands/resume-rlcr-loop.md",
-        "commands/resume-pr-loop.md",
     ];
 
     for file in &loop_commands {

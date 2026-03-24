@@ -81,6 +81,15 @@ pub(super) fn handle_setup(cmd: SetupCommands) -> Result<()> {
 
 fn setup_rlcr_native(options: SetupRlcrOptions) -> Result<()> {
     let project_root = resolve_project_root()?;
+
+    // Check for an existing active RLCR loop — if found, resume it instead of
+    // creating a new one.  This allows the start slash command to double as resume,
+    // ensuring the same hook registration path is used for both flows.
+    let loop_base_dir = project_root.join(".humanize/rlcr");
+    if let Some(_active_loop) = humanize_core::state::find_active_loop(&loop_base_dir, None) {
+        return super::lifecycle::resume_rlcr_native_with_signature("humanize setup rlcr");
+    }
+
     let mut planning_store = PlanningStore::load(&project_root)?;
 
     let chosen_plan = match (
@@ -296,7 +305,7 @@ fn setup_pr_native(options: SetupPrOptions) -> Result<()> {
         bail!("Error: An RLCR loop is already active");
     }
     if newest_active_pr_loop(&project_root.join(".humanize/pr-loop")).is_some() {
-        bail!("Error: A PR loop is already active");
+        bail!("Error: A PR loop is already active. Cancel it first with /humanize:cancel-pr-loop");
     }
 
     ensure_command_exists(

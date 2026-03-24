@@ -64,7 +64,35 @@ If the pre-check passed (or was skipped), execute the setup command to initializ
 humanize setup rlcr $ARGUMENTS
 ```
 
-This command starts an iterative development loop where:
+**Note:** If an active RLCR loop already exists, this command automatically resumes it instead of creating a new one. The output will show `=== resume-rlcr-loop ===` with the current loop state. Follow the resume instructions below.
+
+### Resuming an Active Loop
+
+When the command detects an active loop, it outputs structured metadata and determines the correct phase to continue from. The output includes:
+
+- **Loop metadata**: Loop Directory, State File, Status, Phase, Round, Plan File, Start Branch, Base Branch
+- **Session Rebind**: `armed` (normal) or `skipped` (legacy state)
+- **Action content**: The prompt or instructions for the current phase
+
+**Phase meanings** — the command determines which phase you are in:
+
+| Phase | Meaning | What to do |
+|-------|---------|------------|
+| `implementation` | Current round is in progress | Continue implementing from the printed prompt. Write your summary when done, then stop to trigger Codex review |
+| `review-fix` | Codex review found issues for the current round | Read the printed fix prompt, address the issues, then stop again |
+| `review-pending` | Summary is written, waiting for Codex review | Your work is done for this round. Stop again so Humanize can trigger the Codex review |
+| `review-ready` | `--skip-impl` loop waiting for first review | Follow the printed prompt, stop when ready for review |
+| `finalize` | Final simplification pass before loop completion | Complete the finalize summary, then stop to finish the loop |
+
+**Rules when resuming:**
+- If `Session Rebind: armed`, continue directly from the printed action content
+- If `Session Rebind: skipped`, the loop uses a legacy state schema — use the printed artifacts to recover unfinished work manually
+- Do not start a new RLCR loop just because the current phase is unusual
+- Do not inspect `.humanize/` manually to second-guess the phase
+
+### Creating a New Loop
+
+If no active loop exists, the command creates a new one:
 
 1. You work on the implementation plan provided
 2. Write a summary of your work to the specified summary file

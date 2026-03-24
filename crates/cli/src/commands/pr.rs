@@ -38,15 +38,6 @@ pub(super) struct PrLookupContext {
     pub(super) repo: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct StopHookPromptConfig {
-    pub(super) compact_large_prompts: bool,
-    pub(super) max_inline_bytes: usize,
-}
-
-const STOP_HOOK_COMPACT_PROMPTS_ENV: &str = "HUMANIZE_STOP_HOOK_COMPACT_PROMPTS";
-const STOP_HOOK_PROMPT_MAX_INLINE_BYTES_ENV: &str = "HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES";
-const STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES: usize = 8 * 1024;
 const GH_API_MAX_RETRIES: usize = 3;
 const GH_API_RETRY_DELAY_SECS: u64 = 2;
 
@@ -1006,36 +997,6 @@ pub(super) fn build_impl_review_prompt(
     }
 }
 
-pub(super) fn stop_hook_prompt_config() -> StopHookPromptConfig {
-    StopHookPromptConfig {
-        compact_large_prompts: std::env::var(STOP_HOOK_COMPACT_PROMPTS_ENV)
-            .map(|value| {
-                let normalized = value.trim().to_ascii_lowercase();
-                !matches!(normalized.as_str(), "0" | "false" | "off")
-            })
-            .unwrap_or(true),
-        max_inline_bytes: std::env::var(STOP_HOOK_PROMPT_MAX_INLINE_BYTES_ENV)
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(STOP_HOOK_PROMPT_DEFAULT_MAX_INLINE_BYTES),
-    }
-}
-
-pub(super) fn maybe_compact_stop_hook_prompt<F>(inline_prompt: String, compact_builder: F) -> String
-where
-    F: FnOnce() -> String,
-{
-    let config = stop_hook_prompt_config();
-    if !config.compact_large_prompts || inline_prompt.len() <= config.max_inline_bytes {
-        return inline_prompt;
-    }
-
-    // Keep stop-hook prompt bodies below the risky size window until Claude Code fixes
-    // the large-stdout Stop-hook regression: https://github.com/anthropics/claude-code/issues/37135
-    compact_builder()
-}
-
 pub(super) fn build_next_round_prompt(
     loop_dir: &Path,
     state: &humanize_core::state::State,
@@ -1045,7 +1006,7 @@ pub(super) fn build_next_round_prompt(
     let next_summary_file = loop_dir.join(format!("round-{}-summary.md", next_round));
     let full_alignment = is_full_alignment_round(state.current_round, state.full_review_round);
     let goal_tracker_file = loop_dir.join("goal-tracker.md");
-    let review_result_file =
+    let _review_result_file =
         loop_dir.join(format!("round-{}-review-result.md", state.current_round));
 
     let inline_prompt = render_template_or_fallback(
@@ -1057,20 +1018,7 @@ pub(super) fn build_next_round_prompt(
             ("GOAL_TRACKER_FILE", goal_tracker_file.display().to_string()),
         ],
     );
-    let mut prompt = maybe_compact_stop_hook_prompt(inline_prompt, || {
-        render_template_or_fallback(
-            "claude/next-round-prompt-compact.md",
-            "Your work is not finished. Read and execute the below with ultrathink.\n\n## Original Implementation Plan\n\n@{{PLAN_FILE}}\n\n## Codex Review Result\n\nThe full Codex review is in:\n@{{REVIEW_RESULT_FILE}}\n\nRead that file carefully before making changes.\n\n## Goal Tracker Reference\n@{{GOAL_TRACKER_FILE}}\n",
-            &[
-                ("PLAN_FILE", state.plan_file.clone()),
-                (
-                    "REVIEW_RESULT_FILE",
-                    review_result_file.display().to_string(),
-                ),
-                ("GOAL_TRACKER_FILE", goal_tracker_file.display().to_string()),
-            ],
-        )
-    });
+    let mut prompt = inline_prompt;
 
     if state.ask_codex_question && detect_open_question(review_content) {
         let notice = render_template_or_fallback(
@@ -1121,7 +1069,7 @@ pub(super) fn build_next_round_prompt(
 
 pub(super) fn build_review_phase_fix_prompt(
     review_content: &str,
-    review_result_file: &Path,
+    _review_result_file: &Path,
     summary_file: &Path,
 ) -> String {
     let inline_prompt = render_template_or_fallback(
@@ -1132,19 +1080,7 @@ pub(super) fn build_review_phase_fix_prompt(
             ("SUMMARY_FILE", summary_file.display().to_string()),
         ],
     );
-    maybe_compact_stop_hook_prompt(inline_prompt, || {
-        render_template_or_fallback(
-            "claude/review-phase-prompt-compact.md",
-            "# Code Review Findings\n\nThe full Codex review findings are in:\n@{{REVIEW_RESULT_FILE}}\n\nRead that file carefully and address every issue before continuing.\n\nWrite your summary to: `{{SUMMARY_FILE}}`",
-            &[
-                (
-                    "REVIEW_RESULT_FILE",
-                    review_result_file.display().to_string(),
-                ),
-                ("SUMMARY_FILE", summary_file.display().to_string()),
-            ],
-        )
-    })
+    inline_prompt
 }
 
 pub(super) fn build_review_phase_audit_prompt(review_round: u32, base_branch: &str) -> String {
@@ -1998,7 +1934,7 @@ pub(super) fn build_pr_feedback_markdown(
     pr_number: u32,
     loop_dir: &Path,
     active_bots: &[String],
-    check_file: &Path,
+    _check_file: &Path,
     check_content: &str,
 ) -> String {
     let bot_mentions = build_bot_mention_string(active_bots);
@@ -2015,21 +1951,7 @@ pub(super) fn build_pr_feedback_markdown(
         next_round,
         max_iterations
     );
-    maybe_compact_stop_hook_prompt(inline_prompt, || {
-        format!(
-            "# PR Loop Feedback (Round {})\n\n## Bot Review Analysis\n\nThe full Codex bot-review analysis is in:\n@{}\n\nRead that file carefully and address every remaining issue before continuing.\n\n---\n\n## Your Task\n\n1. Read and understand each issue\n2. Make the necessary code changes\n3. Commit and push your changes\n4. Comment on the PR to trigger re-review:\n   ```bash\ngh pr comment {} --body \"{} please review the latest changes\"\n   ```\n5. Write your resolution summary to: {}\n\n---\n\n**Remaining active bots:** {}\n**Round:** {} of {}\n",
-            next_round,
-            check_file.display(),
-            pr_number,
-            bot_mentions,
-            loop_dir
-                .join(format!("round-{}-pr-resolve.md", next_round))
-                .display(),
-            active_bots.join(", "),
-            next_round,
-            max_iterations
-        )
-    })
+    inline_prompt
 }
 
 pub(super) fn current_unix_epoch() -> i64 {

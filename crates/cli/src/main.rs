@@ -42,10 +42,6 @@ enum Commands {
     #[command(subcommand)]
     Cancel(CancelCommands),
 
-    /// Resume active loops from existing .humanize state
-    #[command(subcommand)]
-    Resume(ResumeCommands),
-
     /// Hook subcommands (called by plugin hooks)
     /// All hooks read JSON input from stdin
     #[command(subcommand)]
@@ -296,15 +292,6 @@ enum CancelCommands {
 }
 
 #[derive(Subcommand)]
-enum ResumeCommands {
-    /// Resume the active RLCR loop
-    Rlcr,
-
-    /// Resume the active PR loop
-    Pr,
-}
-
-#[derive(Subcommand)]
 enum HookCommands {
     /// Read validator hook - reads JSON from stdin
     ReadValidator,
@@ -416,7 +403,6 @@ fn run() -> Result<()> {
     match cli.command {
         Commands::Setup(setup_cmd) => commands::handle_setup(setup_cmd),
         Commands::Cancel(cancel_cmd) => commands::handle_cancel(cancel_cmd),
-        Commands::Resume(resume_cmd) => commands::handle_resume(resume_cmd),
         Commands::Hook(hook_cmd) => commands::handle_hook(hook_cmd),
         Commands::Stop(stop_cmd) => commands::handle_stop(stop_cmd),
         Commands::Monitor(monitor_cmd) => commands::handle_monitor(monitor_cmd),

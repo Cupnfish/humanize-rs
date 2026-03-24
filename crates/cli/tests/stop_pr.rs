@@ -296,7 +296,7 @@ fn stop_pr_comments_with_issues_advance_round_and_write_feedback() {
 }
 
 #[test]
-fn stop_pr_comments_with_issues_use_compact_feedback_when_inline_prompt_is_too_large() {
+fn stop_pr_comments_with_issues_pass_full_feedback_without_compaction() {
     let env = PrStopEnv::new();
     write_fixture(
         env.fixtures(),
@@ -328,7 +328,6 @@ fn stop_pr_comments_with_issues_use_compact_feedback_when_inline_prompt_is_too_l
 
     let output = env
         .env_cmd()
-        .env("HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES", "256")
         .args(["stop", "pr"])
         .output()
         .unwrap();
@@ -339,20 +338,15 @@ fn stop_pr_comments_with_issues_use_compact_feedback_when_inline_prompt_is_too_l
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("round-1-pr-check.md"), "stdout={stdout}");
-    assert!(!stdout.contains(&"A".repeat(512)), "stdout={stdout}");
-    assert!(!stdout.contains(&"B".repeat(512)), "stdout={stdout}");
+    // Full content should be passed through without compaction
+    assert!(stdout.contains("AAAA"), "stdout should contain full content");
+    assert!(stdout.contains("BBBB"), "stdout should contain full content");
 
     let feedback = fs::read_to_string(env.loop_dir.join("round-1-pr-feedback.md")).unwrap();
     assert!(
-        feedback.contains("round-1-pr-check.md"),
-        "feedback={feedback}"
+        feedback.contains("AAAA"),
+        "feedback should contain full content"
     );
-    assert!(
-        feedback.contains("Read that file carefully"),
-        "feedback={feedback}"
-    );
-    assert!(!feedback.contains(&"A".repeat(512)), "feedback={feedback}");
 }
 
 #[test]

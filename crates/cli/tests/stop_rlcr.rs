@@ -205,7 +205,7 @@ fn non_complete_feedback_increments_round_and_writes_review_result() {
 }
 
 #[test]
-fn non_complete_feedback_uses_compact_prompt_when_inline_prompt_is_too_large() {
+fn non_complete_feedback_passes_full_prompt_without_compaction() {
     let repo = TestRepo::new();
     repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n- two\n- three\n");
     repo.write_state(false, 3);
@@ -222,7 +222,6 @@ fn non_complete_feedback_uses_compact_prompt_when_inline_prompt_is_too_large() {
     let output = Command::new(bin())
         .args(["stop", "rlcr"])
         .env("CLAUDE_PROJECT_DIR", repo.root())
-        .env("HUMANIZE_STOP_HOOK_PROMPT_MAX_INLINE_BYTES", "256")
         .env(
             "PATH",
             format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
@@ -233,22 +232,11 @@ fn non_complete_feedback_uses_compact_prompt_when_inline_prompt_is_too_large() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"decision\":\"block\""), "stdout={stdout}");
-    assert!(
-        stdout.contains("round-3-review-result.md"),
-        "stdout={stdout}"
-    );
-    assert!(!stdout.contains(&"A".repeat(512)), "stdout={stdout}");
+    // Full content should be passed through without compaction
+    assert!(stdout.contains("AAAA"), "stdout should contain full content");
 
     let prompt = fs::read_to_string(repo.loop_dir.join("round-4-prompt.md")).unwrap();
-    assert!(
-        prompt.contains("round-3-review-result.md"),
-        "prompt={prompt}"
-    );
-    assert!(
-        prompt.contains("Read that file carefully"),
-        "prompt={prompt}"
-    );
-    assert!(!prompt.contains(&"A".repeat(512)), "prompt={prompt}");
+    assert!(prompt.contains("AAAA"), "prompt should contain full review content");
 }
 
 #[test]
@@ -402,7 +390,7 @@ fn full_alignment_round_writes_full_alignment_review_prompt() {
 }
 
 #[test]
-fn resume_then_stop_still_runs_codex_review() {
+fn setup_auto_resume_then_stop_still_runs_codex_review() {
     let repo = TestRepo::new();
     repo.write_plan("# Plan\n## Goal\nDone\n## Requirements\n- one\n- two\n- three\n");
     repo.write_state(false, 3);
@@ -429,8 +417,9 @@ fn resume_then_stop_still_runs_codex_review() {
         marker.display()
     ));
 
+    // setup rlcr with active loop auto-resumes instead of creating new
     let resume = Command::new(bin())
-        .args(["resume", "rlcr"])
+        .args(["setup", "rlcr", "dummy.md"])
         .env("CLAUDE_PROJECT_DIR", repo.root())
         .output()
         .unwrap();

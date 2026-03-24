@@ -8,13 +8,6 @@ pub(super) fn handle_cancel(cmd: CancelCommands) -> Result<()> {
     }
 }
 
-pub(super) fn handle_resume(cmd: ResumeCommands) -> Result<()> {
-    match cmd {
-        ResumeCommands::Rlcr => resume_rlcr_native(),
-        ResumeCommands::Pr => resume_pr_native(),
-    }
-}
-
 fn cancel_rlcr_native(force: bool) -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/rlcr");
@@ -117,7 +110,7 @@ fn cancel_pr_native(_force: bool) -> Result<()> {
     Ok(())
 }
 
-fn resume_rlcr_native() -> Result<()> {
+pub(super) fn resume_rlcr_native_with_signature(command_signature: &str) -> Result<()> {
     let project_root = resolve_project_root()?;
     let loop_base_dir = project_root.join(".humanize/rlcr");
     let Some(loop_dir) = humanize_core::state::find_active_loop(&loop_base_dir, None) else {
@@ -151,12 +144,7 @@ fn resume_rlcr_native() -> Result<()> {
         }
     };
 
-    arm_resume_session_handshake(
-        &project_root,
-        &state_file,
-        &mut state,
-        "humanize resume rlcr",
-    )?;
+    arm_resume_session_handshake(&project_root, &state_file, &mut state, command_signature)?;
 
     let (phase, action_path, action_content) =
         rlcr_resume_action(&project_root, &loop_dir, &state_file, &state)?;
@@ -240,67 +228,6 @@ fn resume_rlcr_legacy_recovery(
     Ok(())
 }
 
-fn resume_pr_native() -> Result<()> {
-    let project_root = resolve_project_root()?;
-    let loop_base_dir = project_root.join(".humanize/pr-loop");
-    let Some(loop_dir) = newest_active_pr_loop(&loop_base_dir) else {
-        println!("NO_LOOP");
-        println!("No active PR loop found.");
-        std::process::exit(1);
-    };
-
-    let state_file = loop_dir.join("state.md");
-    if !state_file.exists() {
-        println!("NO_ACTIVE_LOOP");
-        println!("No active PR loop state file found.");
-        std::process::exit(1);
-    }
-    let state_content = match fs::read_to_string(&state_file) {
-        Ok(content) => content,
-        Err(_) => {
-            println!("MALFORMED_STATE");
-            println!("Malformed PR loop state file, cannot resume safely");
-            std::process::exit(3);
-        }
-    };
-    let state = humanize_core::state::State::from_markdown(&state_content).unwrap_or_else(|_| {
-        println!("MALFORMED_STATE");
-        println!("Malformed PR loop state file, cannot resume safely");
-        std::process::exit(3);
-    });
-
-    let (phase, action_path, action_content) = pr_resume_action(&loop_dir, &state);
-
-    println!("=== resume-pr-loop ===\n");
-    println!("Loop Directory: {}", loop_dir.display());
-    println!("State File: {}", state_file.display());
-    println!("Status: {}", state_status_label(&state_file));
-    println!("Phase: {}", phase);
-    println!("Round: {} / {}", state.current_round, state.max_iterations);
-    println!(
-        "PR Number: {}",
-        state
-            .pr_number
-            .map(|value| format!("#{value}"))
-            .unwrap_or_else(|| "N/A".to_string())
-    );
-    println!(
-        "Configured Bots: {}",
-        join_list(&state.configured_bots.clone().unwrap_or_default(), "none")
-    );
-    println!(
-        "Active Bots: {}",
-        join_list(&state.active_bots.clone().unwrap_or_default(), "none")
-    );
-    println!("Action File: {}", action_path);
-    println!();
-    print!("{}", action_content);
-    if !action_content.ends_with('\n') {
-        println!();
-    }
-    Ok(())
-}
-
 fn arm_resume_session_handshake(
     project_root: &Path,
     state_file: &Path,
@@ -325,11 +252,23 @@ fn rlcr_resume_action(
 ) -> Result<(String, String, String)> {
     if state_file.ends_with("finalize-state.md") {
         let finalize_summary_file = loop_dir.join("finalize-summary.md");
+        let had_finalize_summary = finalize_summary_file.exists();
         if !finalize_summary_file.exists() {
             fs::write(
                 &finalize_summary_file,
                 "# Finalize Summary\n\nDocument the final simplification pass here.\n",
             )?;
+        }
+        if had_finalize_summary && has_resume_content(&finalize_summary_file) {
+            return Ok((
+                "finalize".to_string(),
+                finalize_summary_file.display().to_string(),
+                format!(
+                    "# Resume Finalize Phase\n\nThe finalize summary already exists.\n\nIf the loop is ready to finish, stop again so Humanize can complete the session.\n\n- Finalize Summary: {}\n- Loop Directory: {}\n",
+                    finalize_summary_file.display(),
+                    loop_dir.display()
+                ),
+            ));
         }
         return Ok((
             "finalize".to_string(),
@@ -338,10 +277,43 @@ fn rlcr_resume_action(
         ));
     }
 
+    let current_summary_file = loop_dir.join(format!("round-{}-summary.md", state.current_round));
+
     if state.review_started {
         let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
         let review_result_file =
             loop_dir.join(format!("round-{}-review-result.md", state.current_round));
+        if has_resume_content(&current_summary_file) {
+            let review_round = state.current_round + 1;
+            let review_prompt = loop_dir.join(format!("round-{}-review-prompt.md", review_round));
+            let review_log = rlcr_cache_dir(project_root, loop_dir)
+                .ok()
+                .map(|cache_dir| {
+                    cache_dir.join(format!("round-{}-codex-review.log", review_round))
+                });
+            let mut content = String::from(
+                "# Resume Review Phase\n\nThe current round summary already exists.\n\nIf your fixes are ready, stop again so Humanize can rerun the Codex review. If not, continue refining the code and summary before stopping.\n",
+            );
+            content.push_str(&format!(
+                "\n- Summary File: {}\n",
+                current_summary_file.display()
+            ));
+            if prompt_file.exists() {
+                content.push_str(&format!("- Fix Prompt: {}\n", prompt_file.display()));
+            }
+            if review_prompt.exists() {
+                content.push_str(&format!("- Review Prompt: {}\n", review_prompt.display()));
+            }
+            if let Some(log_path) = review_log {
+                content.push_str(&format!("- Review Log: {}\n", log_path.display()));
+            }
+            content.push_str(&format!("- Loop Directory: {}\n", loop_dir.display()));
+            return Ok((
+                "review-pending".to_string(),
+                current_summary_file.display().to_string(),
+                content,
+            ));
+        }
         let skip_impl_marker = loop_dir.join(".review-phase-started");
         let skip_impl_ready = skip_impl_marker.exists()
             && prompt_file.exists()
@@ -391,6 +363,26 @@ fn rlcr_resume_action(
         return Ok(("review-pending".to_string(), action_path, content));
     }
 
+    if has_resume_content(&current_summary_file) {
+        let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
+        let mut content = String::from(
+            "# Resume Implementation Review\n\nThe current round summary already exists.\n\nIf the round is ready, stop again so Humanize can run the Codex summary review. If not, continue refining the code and summary before stopping.\n",
+        );
+        content.push_str(&format!(
+            "\n- Summary File: {}\n",
+            current_summary_file.display()
+        ));
+        if prompt_file.exists() {
+            content.push_str(&format!("- Round Prompt: {}\n", prompt_file.display()));
+        }
+        content.push_str(&format!("- Loop Directory: {}\n", loop_dir.display()));
+        return Ok((
+            "review-pending".to_string(),
+            current_summary_file.display().to_string(),
+            content,
+        ));
+    }
+
     let prompt_file = loop_dir.join(format!("round-{}-prompt.md", state.current_round));
     if prompt_file.exists() {
         return Ok((
@@ -432,44 +424,11 @@ fn rlcr_resume_action(
     ))
 }
 
-fn pr_resume_action(
-    loop_dir: &Path,
-    state: &humanize_core::state::State,
-) -> (String, String, String) {
-    let round_feedback = loop_dir.join(format!("round-{}-pr-feedback.md", state.current_round));
-    if round_feedback.exists() {
-        return (
-            "bot-feedback".to_string(),
-            round_feedback.display().to_string(),
-            read_monitor_content(&round_feedback),
-        );
-    }
-
-    let round_prompt = loop_dir.join("round-0-prompt.md");
-    if state.current_round == 0 && round_prompt.exists() {
-        return (
-            "initial".to_string(),
-            round_prompt.display().to_string(),
-            read_monitor_content(&round_prompt),
-        );
-    }
-
-    let resolve_file = loop_dir.join(format!("round-{}-pr-resolve.md", state.current_round));
-    let comment_file = loop_dir.join(format!("round-{}-pr-comment.md", state.current_round + 1));
-    (
-        "active".to_string(),
-        resolve_file.display().to_string(),
-        format!(
-            "# Resume PR Loop\n\nContinue from the existing PR loop state.\n\n- Resolution Summary: {}\n- Latest Bot Comments: {}\n- Loop Directory: {}\n",
-            resolve_file.display(),
-            comment_file.display(),
-            loop_dir.display()
-        ),
-    )
-}
-
-fn read_monitor_content(path: &Path) -> String {
-    fs::read_to_string(path).unwrap_or_else(|_| format!("Unable to read {}", path.display()))
+fn has_resume_content(path: &Path) -> bool {
+    path.is_file()
+        && fs::read_to_string(path)
+            .map(|content| content.lines().any(|line| !line.trim().is_empty()))
+            .unwrap_or(true)
 }
 
 fn rlcr_cache_dir(project_root: &Path, loop_dir: &Path) -> Result<PathBuf> {
