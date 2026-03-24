@@ -144,8 +144,9 @@ pub fn run_exec(prompt: &str, options: &CodexOptions) -> Result<CodexRunResult, 
         .stderr(Stdio::piped())
         .spawn()?;
 
-    if let Some(stdin) = child.stdin.as_mut() {
+    if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes())?;
+        // stdin is dropped here, closing the pipe and sending EOF to the child
     }
 
     let status = match child.wait_timeout(Duration::from_secs(options.timeout_secs))? {
@@ -353,7 +354,70 @@ fn command_for_launcher(launcher: &CodexLauncher) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &OsStr) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn create_fake_codex(tempdir: &TempDir, capture_path: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script_path = tempdir.path().join("fake-codex.sh");
+        std::fs::write(
+            &script_path,
+            format!(
+                "#!/bin/sh\ncat > '{}'\nprintf 'COMPLETE\\n'\n",
+                capture_path.display()
+            ),
+        )
+        .unwrap();
+
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+        script_path
+    }
+
+    #[cfg(windows)]
+    fn create_fake_codex(tempdir: &TempDir, capture_path: &Path) -> PathBuf {
+        let script_path = tempdir.path().join("fake-codex.cmd");
+        std::fs::write(
+            &script_path,
+            format!(
+                "@echo off\r\nmore > \"{}\"\r\necho COMPLETE\r\n",
+                capture_path.display()
+            ),
+        )
+        .unwrap();
+        script_path
+    }
 
     #[test]
     fn exec_args_match_legacy_shape() {
@@ -412,6 +476,27 @@ mod tests {
         assert!(contains_severity_markers("[P0] blocker"));
         assert!(!contains_severity_markers("No priority markers here"));
         assert!(!contains_severity_markers("[PX] invalid"));
+    }
+
+    #[test]
+    fn run_exec_closes_stdin_after_writing_prompt() {
+        let _env_guard = env_lock().lock().unwrap();
+        let tempdir = TempDir::new().unwrap();
+        let capture_path = tempdir.path().join("captured-stdin.txt");
+        let fake_codex = create_fake_codex(&tempdir, &capture_path);
+        let _codex_bin = ScopedEnvVar::set(ENV_CODEX_BIN, fake_codex.as_os_str());
+
+        let prompt = "line one\nline two\n";
+        let options = CodexOptions {
+            timeout_secs: 2,
+            project_root: tempdir.path().to_path_buf(),
+            ..CodexOptions::default()
+        };
+
+        let result = run_exec(prompt, &options).expect("fake codex should receive EOF");
+
+        assert_eq!(result.stdout.trim(), "COMPLETE");
+        assert_eq!(std::fs::read_to_string(capture_path).unwrap(), prompt);
     }
 
     #[test]
